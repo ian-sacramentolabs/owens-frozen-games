@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-<title>Owen's Frozen Games</title>
+<title>Frozen Games</title>
 <style>
   html, body {
     margin: 0; padding: 0; height: 100%; overflow: hidden;
@@ -21,7 +21,36 @@
   }
   #muteBtn { right: 12px; }
   #homeBtn { right: 78px; }
+  #nameBtn { right: 144px; font-size: 22px; }
   .cornerBtn:active { transform: scale(0.94); }
+
+  /* Name-entry overlay (a grown-up types the player's name) */
+  .overlay {
+    position: fixed; inset: 0; z-index: 20; display: flex;
+    align-items: center; justify-content: center;
+    background: rgba(11,43,70,0.72); touch-action: auto;
+  }
+  .overlay[hidden] { display: none; }
+  .nameCard {
+    background: #fff; border-radius: 26px; padding: 26px 24px 24px;
+    width: min(86vw, 420px); text-align: center;
+    box-shadow: 0 12px 44px rgba(0,0,0,0.35);
+  }
+  .nameTitle { color: #2b6cb0; font-size: 27px; font-weight: bold; margin-bottom: 6px; }
+  .nameHint  { color: #6b7f92; font-size: 15px; margin-bottom: 16px; }
+  #nameInput {
+    width: 100%; box-sizing: border-box; font-family: inherit;
+    font-size: 26px; text-align: center; padding: 12px 14px;
+    border: 3px solid #7ec8f0; border-radius: 16px; outline: none; color: #1c3b57;
+    user-select: text; -webkit-user-select: text; touch-action: auto;
+  }
+  #nameInput:focus { border-color: #ff3b6b; }
+  .nameBtn {
+    margin-top: 18px; width: 100%; font-family: inherit;
+    font-size: 24px; font-weight: bold; color: #fff; background: #ff3b6b;
+    border: none; border-radius: 18px; padding: 14px; cursor: pointer;
+  }
+  .nameBtn:active { transform: scale(0.97); }
 
   /* On-screen touch controls — shown only on touch devices */
   .touchControls { display: none; }
@@ -45,6 +74,17 @@
 <canvas id="game"></canvas>
 <button id="homeBtn" class="cornerBtn" title="Back to menu" aria-label="Back to menu">🏠</button>
 <button id="muteBtn" class="cornerBtn" title="Sound on/off" aria-label="Sound on or off">🔊</button>
+<button id="nameBtn" class="cornerBtn" title="Change name" aria-label="Change name">✏️</button>
+
+<div id="nameScreen" class="overlay" hidden>
+  <div class="nameCard">
+    <div class="nameTitle">❄️ Who's playing? ❄️</div>
+    <div class="nameHint">A grown-up can type your name.</div>
+    <input id="nameInput" type="text" maxlength="12" placeholder="Type a name"
+           autocomplete="off" autocapitalize="words" spellcheck="false" />
+    <button id="nameGo" class="nameBtn">Let's play! ❄️</button>
+  </div>
+</div>
 
 <div class="touchControls">
   <button id="leftBtn"  class="padBtn" aria-label="Move left">◀</button>
@@ -63,7 +103,42 @@
    - No fail state, no timer, no enemies; arrows always point to pieces
    ========================================================================= */
 
-const NAME = "Owen";
+// ---- Player name (entered by a grown-up, remembered between visits) ------
+let NAME = "Friend";
+const NAME_KEY = 'owensFrozenGames.playerName';
+let nameOpen = false;
+
+const nameScreen = document.getElementById('nameScreen');
+const nameInput  = document.getElementById('nameInput');
+const nameGo     = document.getElementById('nameGo');
+const nameBtn    = document.getElementById('nameBtn');
+
+function sanitizeName(s) { return (s || '').replace(/\s+/g, ' ').trim().slice(0, 12); }
+function applyName(n) { NAME = n || 'Friend'; document.title = NAME + "'s Frozen Games"; }
+
+function openNameScreen() {
+  nameOpen = true;
+  nameInput.value = (NAME && NAME !== 'Friend') ? NAME : '';
+  nameScreen.hidden = false;
+  setTimeout(() => { nameInput.focus(); nameInput.select(); }, 50);
+}
+function saveNameScreen() {
+  applyName(sanitizeName(nameInput.value));
+  try { localStorage.setItem(NAME_KEY, NAME); } catch (e) {}
+  nameScreen.hidden = true; nameOpen = false; initAudio();
+}
+
+nameGo.addEventListener('click', saveNameScreen);
+nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveNameScreen(); } });
+nameBtn.addEventListener('click', openNameScreen);
+
+// On load: use the remembered name, or ask for one the first time.
+(function initName() {
+  let saved = null;
+  try { saved = localStorage.getItem(NAME_KEY); } catch (e) {}
+  if (saved && saved.trim()) applyName(sanitizeName(saved));
+  else openNameScreen();
+})();
 
 // ---- Virtual world (drawn at this size, scaled to fit the window) --------
 const W = 960, H = 600;
@@ -123,6 +198,7 @@ const keys = {};
 const ARROWS = { ArrowUp:1, ArrowDown:1, ArrowLeft:1, ArrowRight:1 };
 window.addEventListener('keydown', (e) => {
   if (!ARROWS[e.key]) return;
+  if (nameOpen) return;                 // let the name box keep focus
   e.preventDefault(); keys[e.key] = true; initAudio();
   if (!e.repeat) onPress(e.key);
 });
@@ -148,6 +224,7 @@ bindHold(document.getElementById('rightBtn'), 'ArrowRight');
 bindHold(document.getElementById('jumpBtn'),  'ArrowUp');
 
 function onPress(key) {
+  if (nameOpen) return;
   if (state === 'menu') {
     if (key === 'ArrowLeft')  { menuIndex = (menuIndex + STORIES.length - 1) % STORIES.length; sfxTick(); }
     if (key === 'ArrowRight') { menuIndex = (menuIndex + 1) % STORIES.length; sfxTick(); }
@@ -531,6 +608,8 @@ function drawPopup(p){ const a=Math.max(0,p.life/1.1); ctx.globalAlpha=a; drawIt
 function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
 function shadowAt(x,y,w){ ctx.fillStyle='rgba(0,0,0,0.15)'; ctx.beginPath(); ctx.ellipse(x,y,w,w*0.3,0,0,7); ctx.fill(); }
 function labelAt(x,y,text){ ctx.font='bold 22px "Comic Sans MS",sans-serif'; ctx.textAlign='center'; const w=ctx.measureText(text).width+24; ctx.fillStyle='rgba(255,255,255,0.92)'; roundRect(x-w/2,y-30,w,30,15); ctx.fill(); ctx.fillStyle='#1c3b57'; ctx.fillText(text,x,y-8); }
+// Draw centered text, shrinking the font so a long name still fits maxW.
+function fitText(text, x, y, maxW, size){ let fs=size; ctx.font='bold '+fs+'px "Comic Sans MS",sans-serif'; while(fs>20 && ctx.measureText(text).width>maxW){ fs-=2; ctx.font='bold '+fs+'px "Comic Sans MS",sans-serif'; } ctx.fillText(text,x,y); }
 
 function drawCharacter(kind, x, feetY, bob, inAir) {
   const b = Math.sin(bob)*4;
@@ -608,8 +687,8 @@ function drawMenu() {
   ctx.fillStyle=skyGrad('#5b8fd6','#bfe3ff'); ctx.fillRect(0,0,W,H); snow();
   ctx.textAlign='center';
   ctx.fillStyle='rgba(255,255,255,0.92)'; roundRect(W/2-330,48,660,96,26); ctx.fill();
-  ctx.fillStyle='#2b6cb0'; ctx.font='bold 46px "Comic Sans MS",sans-serif';
-  ctx.fillText('❄️ ' + NAME + "'s Frozen Games ❄️", W/2, 110);
+  ctx.fillStyle='#2b6cb0';
+  fitText('❄️ ' + NAME + "'s Frozen Games ❄️", W/2, 110, 610, 46);
 
   const cardW=360, cardH=250, gap=40, totalW=cardW*2+gap, startX=(W-totalW)/2, cy=200;
   STORIES.forEach((s,i)=>{
@@ -644,7 +723,7 @@ function drawWin() {
   else { ctx.save(); ctx.translate(W/2,410); ctx.scale(1.8,1.8); drawSven(false); ctx.restore(); for(let i=0;i<6;i++){ ctx.save(); ctx.translate(W/2-100+i*40, 500+Math.sin(performance.now()/400+i)*3); ctx.rotate(0.2); ctx.fillStyle='#ff8a1e'; ctx.beginPath(); ctx.moveTo(-9,-13); ctx.lineTo(9,-13); ctx.lineTo(0,16); ctx.closePath(); ctx.fill(); ctx.fillStyle='#3fa35a'; ctx.beginPath(); ctx.ellipse(0,-15,4,8,0,0,7); ctx.fill(); ctx.restore(); } }
   ctx.textAlign='center';
   ctx.fillStyle='rgba(255,255,255,0.92)'; roundRect(W/2-340,64,680,150,28); ctx.fill();
-  ctx.fillStyle='#e0710f'; ctx.font='bold 48px "Comic Sans MS",sans-serif'; ctx.fillText('⭐ Great job, ' + NAME + '! ⭐', W/2, 120);
+  ctx.fillStyle='#e0710f'; fitText('⭐ Great job, ' + NAME + '! ⭐', W/2, 120, 630, 48);
   ctx.fillStyle='#2b6cb0'; ctx.font='bold 26px "Comic Sans MS",sans-serif'; ctx.fillText(story.winTitle, W/2, 160);
   ctx.fillStyle='#1c3b57'; ctx.font='bold 22px "Comic Sans MS",sans-serif'; ctx.fillText(story.winLine, W/2, 195);
   const pulse=0.6+0.4*Math.abs(Math.sin(performance.now()/500));
