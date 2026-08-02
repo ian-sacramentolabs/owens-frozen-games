@@ -1,6 +1,6 @@
 # ❄️ Owen's Frozen Games
 
-A gentle, kid-friendly browser game made for a 4-year-old — a *Frozen*-themed mystery you can play with just the **arrow keys**. No install, no internet needed, no way to "lose."
+A gentle, kid-friendly browser game made for a 4-year-old — a *Frozen*-themed mystery you can play with just the **arrow keys** on a computer, or with **on-screen buttons** on a phone or tablet. No install, no internet needed, no way to "lose."
 
 **▶️ Play it here:** https://ian-sacramentolabs.github.io/owens-frozen-games/
 
@@ -10,6 +10,8 @@ A gentle, kid-friendly browser game made for a 4-year-old — a *Frozen*-themed 
 
 ## 🎮 How to play
 
+**On a computer — arrow keys:**
+
 | Key | Action |
 | --- | --- |
 | **← →** | Walk |
@@ -17,16 +19,18 @@ A gentle, kid-friendly browser game made for a 4-year-old — a *Frozen*-themed 
 | **🏠 button** (top-right) | Back to the menu |
 | **🔊 button** (top-right) | Sound on / off |
 
-From the menu, press **← →** to choose a story and **↑** to start.
+**On a phone or tablet — touch buttons:** big **◀ ▶** buttons (bottom-left) to walk and a large **⬆** button (bottom-right) to jump appear automatically on touch screens. The 🏠 and 🔊 buttons work with a tap too.
+
+From the menu, use **← →** (or the touch buttons) to choose a story and **↑** (or ⬆) to start.
 
 ## 🕵️ The two stories
 
-- **🥕 Sven's Lost Carrots** — Sven's carrot snacks went missing! Explore four places (Castle Garden, Frozen Lake, North Mountain, Snowy Woods) as **Anna, Elsa, Kristoff, and Sven**, jumping onto platforms to collect all six carrots.
+- **🥕 Sven's Lost Carrots** — Sven's carrot snacks went missing all over **Elsa's ice castle**! Explore four grand rooms (Great Ice Hall, Frozen Grand Stair, Crystal Ballroom, and the Snowflake Throne Room) as **Anna, Elsa, Kristoff, and Sven**, jumping onto platforms to collect all six carrots.
 - **⛄ Olaf's Missing Pieces** — Gale the wind spirit blew Olaf apart! Find his nose, arms, buttons, and hair. Watch the little Olaf in the corner rebuild himself piece by piece.
 
 ## 👶 Made for little kids
 
-- **Arrow keys only** to play.
+- **Arrow keys** on a computer, or **big touch buttons** on a tablet/phone.
 - **No fail state, no timer, no enemies** — impossible to get stuck or lose.
 - A bobbing arrow always points to the next piece, and the finish flag lights up when a level is done.
 - Big, colorful pictures with minimal reading.

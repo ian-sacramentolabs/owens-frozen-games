@@ -22,12 +22,35 @@
   #muteBtn { right: 12px; }
   #homeBtn { right: 78px; }
   .cornerBtn:active { transform: scale(0.94); }
+
+  /* On-screen touch controls — shown only on touch devices */
+  .touchControls { display: none; }
+  body.touch .touchControls { display: block; }
+  .padBtn {
+    position: fixed; bottom: 20px; z-index: 10;
+    width: 88px; height: 88px; border-radius: 50%;
+    border: 4px solid #ffffff; background: rgba(255,255,255,0.30);
+    color: #fff; font-size: 44px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    touch-action: none; -webkit-tap-highlight-color: transparent;
+  }
+  .padBtn:active { transform: scale(0.92); background: rgba(255,255,255,0.55); }
+  #leftBtn  { left: 20px; }
+  #rightBtn { left: 124px; }
+  #jumpBtn  { right: 24px; width: 104px; height: 104px; font-size: 50px;
+              background: rgba(255,120,170,0.40); }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
 <button id="homeBtn" class="cornerBtn" title="Back to menu" aria-label="Back to menu">🏠</button>
 <button id="muteBtn" class="cornerBtn" title="Sound on/off" aria-label="Sound on or off">🔊</button>
+
+<div class="touchControls">
+  <button id="leftBtn"  class="padBtn" aria-label="Move left">◀</button>
+  <button id="rightBtn" class="padBtn" aria-label="Move right">▶</button>
+  <button id="jumpBtn"  class="padBtn" aria-label="Jump">⬆</button>
+</div>
 
 <script>
 /* =========================================================================
@@ -105,6 +128,25 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => { if (ARROWS[e.key]) keys[e.key] = false; });
 
+// ---- Touch controls: map on-screen buttons to the same arrow logic -------
+const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+if (isTouch) document.body.classList.add('touch');
+
+function bindHold(el, key) {
+  const down = (e) => {
+    e.preventDefault();
+    try { el.setPointerCapture(e.pointerId); } catch (_) {}
+    keys[key] = true; initAudio(); onPress(key);
+  };
+  const up = (e) => { e.preventDefault(); keys[key] = false; };
+  el.addEventListener('pointerdown', down);
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
+}
+bindHold(document.getElementById('leftBtn'),  'ArrowLeft');
+bindHold(document.getElementById('rightBtn'), 'ArrowRight');
+bindHold(document.getElementById('jumpBtn'),  'ArrowUp');
+
 function onPress(key) {
   if (state === 'menu') {
     if (key === 'ArrowLeft')  { menuIndex = (menuIndex + STORIES.length - 1) % STORIES.length; sfxTick(); }
@@ -122,7 +164,7 @@ function onPress(key) {
 // =========================================================================
 // Four floating platforms per level; pieces sit just above a platform so a
 // jump lands you on the platform and collects the piece — forgiving on aim.
-function buildArea(title, who, drawKind, theme, itemTypes) {
+function buildArea(title, who, drawKind, theme, itemTypes, variant) {
   const worldW = 2500;
   const platforms = [
     { x: 520,  y: 400, w: 160 },
@@ -141,20 +183,20 @@ function buildArea(title, who, drawKind, theme, itemTypes) {
   else if (itemTypes.length === 2) chosen = [spots[0], spots[2]];
   else chosen = spots.slice(0, itemTypes.length);
   const items = itemTypes.map((t, i) => ({ x: chosen[i].x, y: chosen[i].y, type: t, got: false, wob: i }));
-  return { title, who, draw: drawKind, theme, worldW, platforms, items, flagX: worldW - 150 };
+  return { title, who, draw: drawKind, theme, variant: variant || 0, worldW, platforms, items, flagX: worldW - 150 };
 }
 
 const STORIES = [
   {
     id: 'carrots', title: "Sven's Lost Carrots", emoji: "🥕",
-    sub: "Help find Sven's carrot snacks!",
+    sub: "Find Sven's carrots in Elsa's ice castle!",
     winTitle: "You found all of Sven's carrots!",
     winLine: "Sven says thank you! 🦌🥕",
     areas: [
-      buildArea("Castle Garden",  "Anna",     "anna",     "garden",   ["carrot","carrot"]),
-      buildArea("Frozen Lake",    "Elsa",     "elsa",     "lake",     ["carrot"]),
-      buildArea("North Mountain", "Kristoff", "kristoff", "mountain", ["carrot","carrot"]),
-      buildArea("Snowy Woods",    "Sven",     "sven",     "woods",    ["carrot"]),
+      buildArea("Great Ice Hall",       "Anna",     "anna",     "icecastle", ["carrot","carrot"], 0),
+      buildArea("Frozen Grand Stair",   "Elsa",     "elsa",     "icecastle", ["carrot"],          1),
+      buildArea("Crystal Ballroom",     "Kristoff", "kristoff", "icecastle", ["carrot","carrot"], 2),
+      buildArea("Snowflake Throne Room","Sven",     "sven",     "icecastle", ["carrot"],          3),
     ],
   },
   {
@@ -321,7 +363,53 @@ function drawSky(theme) {
   if (theme==='garden'){ ctx.fillStyle=skyGrad('#bfe9ff','#eafff2'); ctx.fillRect(0,0,W,H); drawSun(120,110); cloud(500,120); cloud(760,90); }
   else if (theme==='lake'){ ctx.fillStyle=skyGrad('#8fbfe6','#d7f0ff'); ctx.fillRect(0,0,W,H); ctx.fillStyle='#b9d6ea'; farMtn(250,430,300,220); farMtn(650,430,340,250); snow(); }
   else if (theme==='mountain'){ ctx.fillStyle=skyGrad('#a9c7e8','#e9f4ff'); ctx.fillRect(0,0,W,H); ctx.fillStyle='#cfe0f0'; farMtn(260,470,420,340); farMtn(700,470,440,360); ctx.fillStyle='#fff'; peak(260,150,90); peak(700,120,100); snow(); }
+  else if (theme==='icecastle'){ ctx.fillStyle=skyGrad('#6f8fce','#d6e9ff'); ctx.fillRect(0,0,W,H); iceHall(); snow(); }
   else { ctx.fillStyle=skyGrad('#7fa8d8','#cfe6ff'); ctx.fillRect(0,0,W,H); snow(); }
+}
+
+// ---- Elsa's ice castle interior (far background, screen space) -----------
+function iceHall() {
+  // cool wall wash behind everything
+  ctx.fillStyle = 'rgba(150,190,228,0.30)'; ctx.fillRect(0, 0, W, GROUND);
+  // tall pointed ice windows between the pillars
+  for (let x = 200; x < W; x += 210) iceWindow(x, 320, 118, 200);
+  // ice pillars across the back
+  for (let x = 100; x < W + 40; x += 210) iceBackPillar(x, 30, GROUND, 15);
+  // a hanging ice chandelier
+  iceChandelier(W/2, 18);
+}
+function iceWindow(x, baseY, w, h) {
+  const half = w/2;
+  ctx.fillStyle = 'rgba(206,232,255,0.80)';
+  ctx.beginPath();
+  ctx.moveTo(x-half, baseY);
+  ctx.lineTo(x-half, baseY-h*0.6);
+  ctx.lineTo(x, baseY-h);
+  ctx.lineTo(x+half, baseY-h*0.6);
+  ctx.lineTo(x+half, baseY);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 4; ctx.stroke();
+  ctx.strokeStyle = 'rgba(140,175,215,0.6)'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x, baseY); ctx.lineTo(x, baseY-h*0.85);
+  ctx.moveTo(x-half, baseY-h*0.32); ctx.lineTo(x+half, baseY-h*0.32);
+  ctx.stroke();
+}
+function iceBackPillar(x, topY, botY, w) {
+  const g = ctx.createLinearGradient(x-w, 0, x+w, 0);
+  g.addColorStop(0, 'rgba(160,200,235,0.85)');
+  g.addColorStop(0.5, 'rgba(232,246,255,0.92)');
+  g.addColorStop(1, 'rgba(160,200,235,0.85)');
+  ctx.fillStyle = g; ctx.fillRect(x-w, topY, w*2, botY-topY);
+  ctx.fillStyle = 'rgba(214,238,255,0.95)';
+  ctx.fillRect(x-w-5, topY, w*2+10, 12);
+}
+function iceChandelier(x, y) {
+  ctx.strokeStyle = 'rgba(200,230,255,0.7)'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, y+12); ctx.stroke();
+  ctx.fillStyle = 'rgba(222,242,255,0.9)';
+  ctx.beginPath(); ctx.ellipse(x, y+14, 86, 10, 0, 0, 7); ctx.fill();
+  for (let i=-3; i<=3; i++){ const px=x+i*24; ctx.beginPath(); ctx.moveTo(px-6,y+16); ctx.lineTo(px+6,y+16); ctx.lineTo(px,y+42); ctx.closePath(); ctx.fill(); glow(px, y+42, 9, true); }
 }
 function drawSun(x,y){ ctx.fillStyle='#ffe27a'; ctx.beginPath(); ctx.arc(x,y,34,0,7); ctx.fill(); ctx.strokeStyle='#ffe27a'; ctx.lineWidth=5; for(let i=0;i<8;i++){const a=i/8*6.283; ctx.beginPath(); ctx.moveTo(x+Math.cos(a)*40,y+Math.sin(a)*40); ctx.lineTo(x+Math.cos(a)*54,y+Math.sin(a)*54); ctx.stroke();} }
 function cloud(x,y){ ctx.fillStyle='rgba(255,255,255,0.85)'; ctx.beginPath(); ctx.arc(x,y,22,0,7); ctx.arc(x+24,y+4,18,0,7); ctx.arc(x-22,y+6,16,0,7); ctx.fill(); }
@@ -334,7 +422,9 @@ function snow(){ if(!snowFlakes){ snowFlakes=[]; for(let i=0;i<55;i++) snowFlake
 function drawGroundWorld(a) {
   const ww = a.worldW;
   let gc = '#a6e2a1';
-  if (a.theme==='lake') gc='#cdeefc'; else if (a.theme==='mountain'||a.theme==='woods') gc='#eaf3fb';
+  if (a.theme==='lake') gc='#cdeefc';
+  else if (a.theme==='icecastle') gc='#cbe6fb';
+  else if (a.theme==='mountain'||a.theme==='woods') gc='#eaf3fb';
   ctx.fillStyle = gc; ctx.fillRect(0, GROUND, ww, H-GROUND);
   ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fillRect(0, GROUND, ww, 5);
 
@@ -346,6 +436,16 @@ function drawGroundWorld(a) {
     ctx.strokeStyle='rgba(255,255,255,0.7)'; ctx.lineWidth=3;
     for(let x=80;x<ww;x+=160){ ctx.beginPath(); ctx.moveTo(x,GROUND+6); ctx.lineTo(x+60,H); ctx.stroke(); }
     drawSnowman(180, GROUND-14, false);
+  } else if (a.theme==='icecastle') {
+    // glossy reflections streaking down the ice floor
+    ctx.strokeStyle='rgba(255,255,255,0.40)'; ctx.lineWidth=2;
+    for(let x=40;x<ww;x+=90){ ctx.beginPath(); ctx.moveTo(x,GROUND+8); ctx.lineTo(x-26,H); ctx.stroke(); }
+    // a frosted runner down the middle of the hall
+    ctx.fillStyle='rgba(120,180,225,0.20)'; ctx.fillRect(0,GROUND+46,ww,22);
+    // tall ice columns lining the room
+    for(let x=150;x<ww-120;x+=360) drawIcePillar(x, GROUND);
+    // the throne room gets Elsa's ice throne at the end
+    if (a.variant===3) drawIceThrone(ww-360, GROUND);
   } else if (a.theme==='mountain') {
     for(let x=70;x<ww;x+=190) drawPine(x, GROUND, 64);
   } else {
@@ -357,9 +457,38 @@ function drawFlower(x,y,c){ ctx.fillStyle='#3fa35a'; ctx.fillRect(x-2,y,4,24); c
 function drawPine(x,groundY,h){ ctx.fillStyle='#5b3a1e'; ctx.fillRect(x-6,groundY-14,12,20); ctx.fillStyle='#2f8f57'; for(let i=0;i<3;i++){const yy=groundY-10-i*h*0.28, ww=h*0.5*(1-i*0.22); ctx.beginPath(); ctx.moveTo(x-ww,yy); ctx.lineTo(x,yy-h*0.42); ctx.lineTo(x+ww,yy); ctx.closePath(); ctx.fill();} ctx.fillStyle='rgba(255,255,255,0.85)'; for(let i=0;i<3;i++){const yy=groundY-10-i*h*0.28, ww=h*0.5*(1-i*0.22); ctx.beginPath(); ctx.moveTo(x-ww,yy); ctx.lineTo(x,yy-h*0.14); ctx.lineTo(x+ww*0.5,yy-2); ctx.closePath(); ctx.fill();} }
 function drawCastle(x,y){ ctx.fillStyle='#7fa9c9'; ctx.fillRect(x-90,y+40,180,GROUND-(y+40)); ctx.fillStyle='#6b93b3'; ctx.fillRect(x-120,y+80,40,GROUND-(y+80)); ctx.fillRect(x+80,y+80,40,GROUND-(y+80)); ctx.fillStyle='#6f7fd6'; peak(x-100,y+30,60); peak(x+100,y+30,60); peak(x,y-10,80); ctx.fillStyle='#9fd4ff'; ctx.fillRect(x-18,y+150,36,60); }
 
+// Foreground ice column standing on the castle floor
+function drawIcePillar(x, groundY){
+  const topY = 150, w = 24;
+  const g = ctx.createLinearGradient(x-w, 0, x+w, 0);
+  g.addColorStop(0, 'rgba(150,195,230,0.75)');
+  g.addColorStop(0.5, 'rgba(234,247,255,0.88)');
+  g.addColorStop(1, 'rgba(150,195,230,0.75)');
+  ctx.fillStyle = g; ctx.fillRect(x-w, topY, w*2, groundY-topY);
+  ctx.fillStyle = 'rgba(212,238,255,0.95)';
+  ctx.fillRect(x-w-6, groundY-14, w*2+12, 14);   // base
+  ctx.fillRect(x-w-6, topY, w*2+12, 14);         // capital
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.fillRect(x-w+5, topY+16, 5, groundY-topY-30); // shine
+}
+// Elsa's ice throne (throne-room finale)
+function drawIceThrone(x, groundY){
+  ctx.fillStyle = 'rgba(202,231,255,0.9)';
+  roundRect(x-52, groundY-72, 104, 72, 10); ctx.fill();     // seat
+  ctx.beginPath();                                          // tall back
+  ctx.moveTo(x-46, groundY-72); ctx.lineTo(x-46, groundY-196);
+  ctx.lineTo(x, groundY-236); ctx.lineTo(x+46, groundY-196);
+  ctx.lineTo(x+46, groundY-72); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 3; ctx.stroke();
+  ctx.fillStyle = 'rgba(120,170,215,0.65)';
+  ctx.font = 'bold 40px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('❄', x, groundY-150);
+}
+
 function drawPlatform(p, theme) {
   let top='#8fd68a', side='#5aa860';
   if (theme==='lake'){ top='#bfe8fb'; side='#8fcbe8'; }
+  else if (theme==='icecastle'){ top='#eaf6ff'; side='#a9d3ee'; }
   else if (theme==='mountain'||theme==='woods'){ top='#ffffff'; side='#cfe0ef'; }
   ctx.fillStyle = side; roundRect(p.x, p.y, p.w, 26, 10); ctx.fill();
   ctx.fillStyle = top;  roundRect(p.x, p.y, p.w, 12, 8); ctx.fill();
