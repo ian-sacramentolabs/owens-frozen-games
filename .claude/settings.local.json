@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo \"global name: $\\(git config --global user.name\\)\")",
+      "Bash(echo \"global email: $\\(git config --global user.email\\)\")",
+      "Bash(echo \"gh login: $\\(gh api user -q .login 2>&1\\)\")",
+      "Bash(echo \"gh id: $\\(gh api user -q .id 2>&1\\)\")",
+      "Bash(git init *)"
+    ]
+  }
+}

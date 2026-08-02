@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Owen's Frozen Games</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: #0b2b46;
+    font-family: "Comic Sans MS", "Trebuchet MS", Verdana, sans-serif;
+    -webkit-user-select: none; user-select: none; touch-action: none;
+  }
+  #game { display: block; width: 100vw; height: 100vh; }
+  .cornerBtn {
+    position: fixed; top: 12px; z-index: 10;
+    width: 54px; height: 54px; border-radius: 50%;
+    border: 3px solid #ffffff; background: rgba(255,255,255,0.25);
+    color: #fff; font-size: 26px; cursor: pointer; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #muteBtn { right: 12px; }
+  #homeBtn { right: 78px; }
+  .cornerBtn:active { transform: scale(0.94); }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<button id="homeBtn" class="cornerBtn" title="Back to menu" aria-label="Back to menu">🏠</button>
+<button id="muteBtn" class="cornerBtn" title="Sound on/off" aria-label="Sound on or off">🔊</button>
+
+<script>
+/* =========================================================================
+   Owen's Frozen Games — a gentle 2D platformer for a 4-year-old
+   - Arrow keys only:  ← → move,  ↑ jump
+   - Main menu to choose a story
+   - Story 1: Sven's Lost Carrots   (collect carrots)
+   - Story 2: Olaf's Missing Pieces (rebuild Olaf, HUD assembles him)
+   - Scrolling levels, jump onto platforms to reach pieces
+   - No fail state, no timer, no enemies; arrows always point to pieces
+   ========================================================================= */
+
+const NAME = "Owen";
+
+// ---- Virtual world (drawn at this size, scaled to fit the window) --------
+const W = 960, H = 600;
+const GROUND = 500;                 // y of the ground surface (feet stand here)
+const GRAVITY = 2200, JUMP = 900, MOVE = 340, FOOT = 68;
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let scale = 1, offX = 0, offY = 0, DPR = 1;
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  const cw = window.innerWidth, ch = window.innerHeight;
+  canvas.width = Math.floor(cw * DPR);
+  canvas.height = Math.floor(ch * DPR);
+  canvas.style.width = cw + 'px';
+  canvas.style.height = ch + 'px';
+  scale = Math.min(cw / W, ch / H);
+  offX = (cw - W * scale) / 2;
+  offY = (ch - H * scale) / 2;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ---- Sound (WebAudio, no files) ------------------------------------------
+let audioCtx = null, muted = false;
+function initAudio() {
+  if (!audioCtx) { try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){ audioCtx=null; } }
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}
+function tone(freq, start, dur, type, vol) {
+  if (!audioCtx || muted) return;
+  const t0 = audioCtx.currentTime + start;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = type || 'sine'; o.frequency.value = freq;
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(vol || 0.2, t0 + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(t0); o.stop(t0 + dur + 0.02);
+}
+function sfxStep()    { tone(170, 0, 0.06, 'triangle', 0.05); }
+function sfxJump()    { tone(320,0,0.09,'square',0.10); tone(520,0.06,0.1,'square',0.10); }
+function sfxCollect() { tone(523,0,0.13,'sine',0.25); tone(659,0.1,0.13,'sine',0.25); tone(784,0.2,0.2,'sine',0.28); tone(1046,0.32,0.28,'sine',0.24); }
+function sfxTick()    { tone(600,0,0.05,'sine',0.12); }
+function sfxSwitch()  { tone(392,0,0.14,'sine',0.2); tone(587,0.09,0.18,'sine',0.2); }
+function sfxWin()     { [523,659,784,1046,784,1046,1318].forEach((f,i)=>{ tone(f,i*0.16,0.28,'sine',0.24); tone(f/2,i*0.16,0.28,'triangle',0.1); }); }
+
+const muteBtn = document.getElementById('muteBtn');
+muteBtn.addEventListener('click', () => { muted = !muted; muteBtn.textContent = muted ? '🔇' : '🔊'; initAudio(); });
+
+const homeBtn = document.getElementById('homeBtn');
+homeBtn.addEventListener('click', () => { state = 'menu'; keys.ArrowLeft=keys.ArrowRight=keys.ArrowUp=keys.ArrowDown=false; });
+
+// ---- Input: arrows only --------------------------------------------------
+const keys = {};
+const ARROWS = { ArrowUp:1, ArrowDown:1, ArrowLeft:1, ArrowRight:1 };
+window.addEventListener('keydown', (e) => {
+  if (!ARROWS[e.key]) return;
+  e.preventDefault(); keys[e.key] = true; initAudio();
+  if (!e.repeat) onPress(e.key);
+});
+window.addEventListener('keyup', (e) => { if (ARROWS[e.key]) keys[e.key] = false; });
+
+function onPress(key) {
+  if (state === 'menu') {
+    if (key === 'ArrowLeft')  { menuIndex = (menuIndex + STORIES.length - 1) % STORIES.length; sfxTick(); }
+    if (key === 'ArrowRight') { menuIndex = (menuIndex + 1) % STORIES.length; sfxTick(); }
+    if (key === 'ArrowUp')    { startStory(menuIndex); }
+  } else if (state === 'play') {
+    if (key === 'ArrowUp') player.wantJump = true;
+  } else if (state === 'win') {
+    if (key === 'ArrowUp') { state = 'menu'; }
+  }
+}
+
+// =========================================================================
+//  STORY / LEVEL DATA
+// =========================================================================
+// Four floating platforms per level; pieces sit just above a platform so a
+// jump lands you on the platform and collects the piece — forgiving on aim.
+function buildArea(title, who, drawKind, theme, itemTypes) {
+  const worldW = 2500;
+  const platforms = [
+    { x: 520,  y: 400, w: 160 },
+    { x: 1000, y: 350, w: 180 },
+    { x: 1520, y: 405, w: 160 },
+    { x: 1980, y: 360, w: 170 },
+  ];
+  const spots = [
+    { x: 600,  y: 350 },
+    { x: 1090, y: 300 },
+    { x: 1600, y: 355 },
+    { x: 2065, y: 310 },
+  ];
+  let chosen;
+  if (itemTypes.length === 1) chosen = [spots[1]];
+  else if (itemTypes.length === 2) chosen = [spots[0], spots[2]];
+  else chosen = spots.slice(0, itemTypes.length);
+  const items = itemTypes.map((t, i) => ({ x: chosen[i].x, y: chosen[i].y, type: t, got: false, wob: i }));
+  return { title, who, draw: drawKind, theme, worldW, platforms, items, flagX: worldW - 150 };
+}
+
+const STORIES = [
+  {
+    id: 'carrots', title: "Sven's Lost Carrots", emoji: "🥕",
+    sub: "Help find Sven's carrot snacks!",
+    winTitle: "You found all of Sven's carrots!",
+    winLine: "Sven says thank you! 🦌🥕",
+    areas: [
+      buildArea("Castle Garden",  "Anna",     "anna",     "garden",   ["carrot","carrot"]),
+      buildArea("Frozen Lake",    "Elsa",     "elsa",     "lake",     ["carrot"]),
+      buildArea("North Mountain", "Kristoff", "kristoff", "mountain", ["carrot","carrot"]),
+      buildArea("Snowy Woods",    "Sven",     "sven",     "woods",    ["carrot"]),
+    ],
+  },
+  {
+    id: 'olaf', title: "Olaf's Missing Pieces", emoji: "⛄",
+    sub: "Gale blew Olaf apart! Find his pieces!",
+    winTitle: "You put Olaf back together!",
+    winLine: "Olaf says: I like warm hugs! ⛄",
+    areas: [
+      buildArea("Castle Garden",  "Anna",     "anna",     "garden",   ["nose"]),
+      buildArea("Frozen Lake",    "Elsa",     "elsa",     "lake",     ["arm"]),
+      buildArea("North Mountain", "Kristoff", "kristoff", "mountain", ["arm"]),
+      buildArea("Snowy Woods",    "Sven",     "sven",     "woods",    ["buttons","hair"]),
+    ],
+  },
+];
+
+// =========================================================================
+//  GAME STATE
+// =========================================================================
+let state = 'menu';         // menu | play | switching | win
+let menuIndex = 0;
+let story = null, area = null, areaIndex = 0;
+let totalItems = 0, collected = 0, parts = {};
+let cameraX = 0, stateTime = 0, lastT = 0;
+
+const player = { x: 120, y: GROUND, vy: 0, dir: 1, onGround: true, moving: false, bob: 0, wantJump: false };
+let sparkles = [], popups = [], confetti = [];
+
+function currentArea() { return story.areas[areaIndex]; }
+
+function startStory(idx) {
+  story = STORIES[idx];
+  story.areas.forEach(a => a.items.forEach(it => it.got = false));
+  totalItems = story.areas.reduce((n,a)=> n + a.items.length, 0);
+  collected = 0; parts = {};
+  areaIndex = 0;
+  loadArea();
+  sfxSwitch();
+  state = 'switching'; stateTime = 0;
+}
+function loadArea() {
+  area = currentArea();
+  player.x = 110; player.y = GROUND; player.vy = 0; player.onGround = true; player.dir = 1; player.wantJump = false;
+  cameraX = 0; sparkles = []; popups = [];
+}
+function areaItemsLeft() { return area.items.some(it => !it.got); }
+
+// =========================================================================
+//  UPDATE
+// =========================================================================
+function update(dt) {
+  stateTime += dt;
+
+  if (state === 'switching') { if (stateTime > 1.8) { state = 'play'; stateTime = 0; } }
+  else if (state === 'play') updatePlay(dt);
+  else if (state === 'win') {
+    confetti.forEach(p => { p.x += p.vx*dt; p.y += p.vy*dt; p.rot += p.vr*dt; if (p.y > H+20){ p.y=-20; p.x=Math.random()*W; } });
+  }
+
+  // sparkles & popups
+  for (let i = sparkles.length-1; i>=0; i--){ const s=sparkles[i]; s.life-=dt; if(s.kind==='burst'){ s.x+=s.vx*dt; s.y+=s.vy*dt; s.vy+=300*dt; } if(s.life<=0) sparkles.splice(i,1); }
+  for (let i = popups.length-1; i>=0; i--){ const p=popups[i]; p.life-=dt; p.y-=40*dt; if(p.life<=0) popups.splice(i,1); }
+}
+
+function updatePlay(dt) {
+  // horizontal
+  let dx = 0;
+  if (keys.ArrowLeft) dx -= 1;
+  if (keys.ArrowRight) dx += 1;
+  player.moving = dx !== 0;
+  if (dx !== 0) player.dir = dx > 0 ? 1 : -1;
+  player.x += dx * MOVE * dt;
+  player.x = Math.max(40, Math.min(area.worldW - 40, player.x));
+  if (player.moving && player.onGround) { player.bob += dt*10; if (Math.random()<0.06) sfxStep(); }
+
+  // jump
+  if (player.wantJump && player.onGround) { player.vy = -JUMP; player.onGround = false; sfxJump(); }
+  player.wantJump = false;
+
+  // gravity + vertical
+  const prevFeet = player.y;
+  player.vy += GRAVITY * dt;
+  player.y += player.vy * dt;
+
+  // land on platforms (one-way, from above)
+  player.onGround = false;
+  if (player.vy >= 0) {
+    for (const p of area.platforms) {
+      if (player.x > p.x - 10 && player.x < p.x + p.w + 10 && prevFeet <= p.y + 2 && player.y >= p.y) {
+        player.y = p.y; player.vy = 0; player.onGround = true; break;
+      }
+    }
+  }
+  // ground
+  if (player.y >= GROUND) { player.y = GROUND; player.vy = 0; player.onGround = true; }
+
+  // Elsa sparkle trail
+  if (area.draw === 'elsa' && (player.moving || !player.onGround) && Math.random() < 0.6)
+    sparkles.push({ x: player.x + (Math.random()*24-12), y: player.y - 30, life: 0.7, max: 0.7, kind:'trail' });
+
+  // collect
+  const cy = player.y - 40;
+  for (const it of area.items) {
+    it.wob += dt * 3;
+    if (it.got) continue;
+    if (Math.hypot(player.x - it.x, cy - it.y) < 60) {
+      it.got = true; collected++;
+      parts[it.type] = (parts[it.type] || 0) + 1;
+      sfxCollect();
+      popups.push({ x: it.x, y: it.y - 20, life: 1.1, type: it.type });
+      for (let i=0;i<22;i++){ const a=Math.random()*Math.PI*2, sp=60+Math.random()*150; sparkles.push({x:it.x,y:it.y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,max:1,kind:'burst'}); }
+    }
+  }
+
+  // reach the flag when the area is cleared
+  if (!areaItemsLeft() && player.onGround && Math.abs(player.x - area.flagX) < 55) {
+    if (areaIndex < story.areas.length - 1) { areaIndex++; loadArea(); sfxSwitch(); state='switching'; stateTime=0; }
+    else { winGame(); }
+  }
+
+  // camera follows player
+  cameraX = Math.max(0, Math.min(area.worldW - W, player.x - W/2));
+}
+
+function winGame() {
+  confetti = [];
+  for (let i=0;i<150;i++) confetti.push({ x:Math.random()*W, y:-Math.random()*H, vy:60+Math.random()*130, vx:Math.random()*40-20, rot:Math.random()*Math.PI, vr:Math.random()*6-3, c:['#ff6b9d','#7ed0ff','#ffd93b','#8affc1','#c8a2ff','#fff'][Math.floor(Math.random()*6)], s:8+Math.random()*8 });
+  sfxWin(); state='win'; stateTime=0;
+}
+
+// =========================================================================
+//  DRAW
+// =========================================================================
+function draw() {
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ctx.fillStyle = '#0b2b46'; ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.save();
+  ctx.translate(offX, offY); ctx.scale(scale, scale);
+  ctx.beginPath(); ctx.rect(0,0,W,H); ctx.clip();
+
+  if (state === 'menu') drawMenu();
+  else if (state === 'win') drawWin();
+  else {
+    drawSky(area.theme);
+    ctx.save(); ctx.translate(-cameraX, 0);
+      drawGroundWorld(area);
+      area.platforms.forEach(p => drawPlatform(p, area.theme));
+      area.items.forEach(it => { if (!it.got) { drawItem(it.type, it.x, it.y, it.wob, false); drawHintArrow(it.x, it.y, it.wob); } });
+      if (!areaItemsLeft()) drawFlag(area.flagX, true); else drawFlag(area.flagX, false);
+      drawSparklesWorld('trail');
+      drawCharacter(area.draw, player.x, player.y, player.dir, player.moving && player.onGround ? player.bob : 0, !player.onGround);
+      drawSparklesWorld('burst');
+      popups.forEach(p => drawPopup(p));
+    ctx.restore();
+    drawHUD();
+    if (state === 'switching') drawSwitchBanner();
+  }
+  ctx.restore();
+}
+
+// ---- Sky (screen space) --------------------------------------------------
+function skyGrad(c1,c2){ const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,c1); g.addColorStop(1,c2); return g; }
+function drawSky(theme) {
+  if (theme==='garden'){ ctx.fillStyle=skyGrad('#bfe9ff','#eafff2'); ctx.fillRect(0,0,W,H); drawSun(120,110); cloud(500,120); cloud(760,90); }
+  else if (theme==='lake'){ ctx.fillStyle=skyGrad('#8fbfe6','#d7f0ff'); ctx.fillRect(0,0,W,H); ctx.fillStyle='#b9d6ea'; farMtn(250,430,300,220); farMtn(650,430,340,250); snow(); }
+  else if (theme==='mountain'){ ctx.fillStyle=skyGrad('#a9c7e8','#e9f4ff'); ctx.fillRect(0,0,W,H); ctx.fillStyle='#cfe0f0'; farMtn(260,470,420,340); farMtn(700,470,440,360); ctx.fillStyle='#fff'; peak(260,150,90); peak(700,120,100); snow(); }
+  else { ctx.fillStyle=skyGrad('#7fa8d8','#cfe6ff'); ctx.fillRect(0,0,W,H); snow(); }
+}
+function drawSun(x,y){ ctx.fillStyle='#ffe27a'; ctx.beginPath(); ctx.arc(x,y,34,0,7); ctx.fill(); ctx.strokeStyle='#ffe27a'; ctx.lineWidth=5; for(let i=0;i<8;i++){const a=i/8*6.283; ctx.beginPath(); ctx.moveTo(x+Math.cos(a)*40,y+Math.sin(a)*40); ctx.lineTo(x+Math.cos(a)*54,y+Math.sin(a)*54); ctx.stroke();} }
+function cloud(x,y){ ctx.fillStyle='rgba(255,255,255,0.85)'; ctx.beginPath(); ctx.arc(x,y,22,0,7); ctx.arc(x+24,y+4,18,0,7); ctx.arc(x-22,y+6,16,0,7); ctx.fill(); }
+function farMtn(cx,baseY,w,h){ ctx.beginPath(); ctx.moveTo(cx-w/2,baseY); ctx.lineTo(cx,baseY-h); ctx.lineTo(cx+w/2,baseY); ctx.closePath(); ctx.fill(); }
+function peak(cx,topY,w){ ctx.beginPath(); ctx.moveTo(cx-w/2,topY+w*0.7); ctx.lineTo(cx,topY); ctx.lineTo(cx+w/2,topY+w*0.7); ctx.closePath(); ctx.fill(); }
+let snowFlakes=null;
+function snow(){ if(!snowFlakes){ snowFlakes=[]; for(let i=0;i<55;i++) snowFlakes.push({x:Math.random()*W,y:Math.random()*H,r:1+Math.random()*3,s:15+Math.random()*30}); } ctx.fillStyle='rgba(255,255,255,0.9)'; const t=performance.now()/1000; snowFlakes.forEach(f=>{ const yy=(f.y+t*f.s)%H, xx=f.x+Math.sin((yy+f.x)/40)*8; ctx.beginPath(); ctx.arc(xx,yy,f.r,0,7); ctx.fill(); }); }
+
+// ---- Ground + decorations (world space) ----------------------------------
+function drawGroundWorld(a) {
+  const ww = a.worldW;
+  let gc = '#a6e2a1';
+  if (a.theme==='lake') gc='#cdeefc'; else if (a.theme==='mountain'||a.theme==='woods') gc='#eaf3fb';
+  ctx.fillStyle = gc; ctx.fillRect(0, GROUND, ww, H-GROUND);
+  ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fillRect(0, GROUND, ww, 5);
+
+  if (a.theme==='garden') {
+    ctx.fillStyle='#8fd68a'; for(let x=30;x<ww;x+=110) roundBush(x,GROUND,44);
+    for(let i=0,x=90;x<ww;x+=140,i++) drawFlower(x,GROUND+40+(i%2)*22,['#ff8fb1','#ffd93b','#c8a2ff'][i%3]);
+    drawCastle(ww-360, 150);
+  } else if (a.theme==='lake') {
+    ctx.strokeStyle='rgba(255,255,255,0.7)'; ctx.lineWidth=3;
+    for(let x=80;x<ww;x+=160){ ctx.beginPath(); ctx.moveTo(x,GROUND+6); ctx.lineTo(x+60,H); ctx.stroke(); }
+    drawSnowman(180, GROUND-14, false);
+  } else if (a.theme==='mountain') {
+    for(let x=70;x<ww;x+=190) drawPine(x, GROUND, 64);
+  } else {
+    for(let x=60;x<ww;x+=150) drawPine(x, GROUND, 78 + ((x/150)%3)*16);
+  }
+}
+function roundBush(x,y,r){ ctx.beginPath(); ctx.arc(x,y,r,Math.PI,0); ctx.fill(); }
+function drawFlower(x,y,c){ ctx.fillStyle='#3fa35a'; ctx.fillRect(x-2,y,4,24); ctx.fillStyle=c; for(let i=0;i<5;i++){const a=i/5*6.283; ctx.beginPath(); ctx.arc(x+Math.cos(a)*8,y+Math.sin(a)*8,6,0,7); ctx.fill();} ctx.fillStyle='#ffd93b'; ctx.beginPath(); ctx.arc(x,y,5,0,7); ctx.fill(); }
+function drawPine(x,groundY,h){ ctx.fillStyle='#5b3a1e'; ctx.fillRect(x-6,groundY-14,12,20); ctx.fillStyle='#2f8f57'; for(let i=0;i<3;i++){const yy=groundY-10-i*h*0.28, ww=h*0.5*(1-i*0.22); ctx.beginPath(); ctx.moveTo(x-ww,yy); ctx.lineTo(x,yy-h*0.42); ctx.lineTo(x+ww,yy); ctx.closePath(); ctx.fill();} ctx.fillStyle='rgba(255,255,255,0.85)'; for(let i=0;i<3;i++){const yy=groundY-10-i*h*0.28, ww=h*0.5*(1-i*0.22); ctx.beginPath(); ctx.moveTo(x-ww,yy); ctx.lineTo(x,yy-h*0.14); ctx.lineTo(x+ww*0.5,yy-2); ctx.closePath(); ctx.fill();} }
+function drawCastle(x,y){ ctx.fillStyle='#7fa9c9'; ctx.fillRect(x-90,y+40,180,GROUND-(y+40)); ctx.fillStyle='#6b93b3'; ctx.fillRect(x-120,y+80,40,GROUND-(y+80)); ctx.fillRect(x+80,y+80,40,GROUND-(y+80)); ctx.fillStyle='#6f7fd6'; peak(x-100,y+30,60); peak(x+100,y+30,60); peak(x,y-10,80); ctx.fillStyle='#9fd4ff'; ctx.fillRect(x-18,y+150,36,60); }
+
+function drawPlatform(p, theme) {
+  let top='#8fd68a', side='#5aa860';
+  if (theme==='lake'){ top='#bfe8fb'; side='#8fcbe8'; }
+  else if (theme==='mountain'||theme==='woods'){ top='#ffffff'; side='#cfe0ef'; }
+  ctx.fillStyle = side; roundRect(p.x, p.y, p.w, 26, 10); ctx.fill();
+  ctx.fillStyle = top;  roundRect(p.x, p.y, p.w, 12, 8); ctx.fill();
+}
+
+// ---- Collectible pieces --------------------------------------------------
+function glow(x,y,r,bright){ const g=ctx.createRadialGradient(x,y,3,x,y,r); g.addColorStop(0,'rgba(255,225,130,'+(bright?0.95:0.55)+')'); g.addColorStop(1,'rgba(255,225,130,0)'); ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,7); ctx.fill(); }
+function drawItem(type, x, y, wob, bright) {
+  const bob = Math.sin(wob)*6; y += bob;
+  glow(x,y,52,bright);
+  if (type==='carrot' || type==='nose') drawCarrotShape(x,y);
+  else if (type==='arm') drawArm(x,y);
+  else if (type==='buttons') drawButtons(x,y);
+  else if (type==='hair') drawHair(x,y);
+}
+function drawCarrotShape(x,y){ ctx.save(); ctx.translate(x,y); ctx.rotate(0.25); ctx.fillStyle='#ff8a1e'; ctx.beginPath(); ctx.moveTo(-15,-24); ctx.lineTo(15,-24); ctx.lineTo(0,32); ctx.closePath(); ctx.fill(); ctx.strokeStyle='#e0710f'; ctx.lineWidth=2; for(let i=-1;i<=1;i++){ ctx.beginPath(); ctx.moveTo(i*7,-16); ctx.lineTo(i*5,8); ctx.stroke(); } ctx.fillStyle='#3fa35a'; for(let i=-1;i<=1;i++){ ctx.beginPath(); ctx.ellipse(i*7,-28,5,14,i*0.4,0,7); ctx.fill(); } ctx.restore(); }
+function drawArm(x,y){ ctx.save(); ctx.translate(x,y); ctx.rotate(-0.3); ctx.strokeStyle='#6b4a2a'; ctx.lineWidth=6; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(-22,10); ctx.lineTo(22,-10); ctx.moveTo(6,-2); ctx.lineTo(16,-14); ctx.moveTo(6,-2); ctx.lineTo(18,4); ctx.stroke(); ctx.restore(); }
+function drawButtons(x,y){ ctx.fillStyle='#2a2a2a'; for(let i=-1;i<=1;i++){ ctx.beginPath(); ctx.arc(x,y+i*16,7,0,7); ctx.fill(); } }
+function drawHair(x,y){ ctx.strokeStyle='#6b4a2a'; ctx.lineWidth=4; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(x,y+14); ctx.lineTo(x-10,y-16); ctx.moveTo(x,y+14); ctx.lineTo(x,y-20); ctx.moveTo(x,y+14); ctx.lineTo(x+10,y-16); ctx.stroke(); }
+
+function drawHintArrow(x, y, wob){ const ay = y - 60 + Math.sin(wob*3)*6; ctx.fillStyle='#ff3b6b'; ctx.beginPath(); ctx.moveTo(x-14,ay-12); ctx.lineTo(x+14,ay-12); ctx.lineTo(x,ay+8); ctx.closePath(); ctx.fill(); }
+
+function drawFlag(x, active) {
+  ctx.strokeStyle = active ? '#8a5a2b' : '#9aa4ad'; ctx.lineWidth=6; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(x, GROUND); ctx.lineTo(x, GROUND-120); ctx.stroke();
+  const wave = active ? Math.sin(performance.now()/200)*6 : 0;
+  ctx.fillStyle = active ? '#ff3b6b' : '#c7ced4';
+  ctx.beginPath(); ctx.moveTo(x, GROUND-120); ctx.lineTo(x+60, GROUND-105+wave); ctx.lineTo(x, GROUND-88); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 20px "Comic Sans MS",sans-serif'; ctx.textAlign='center';
+  ctx.fillText('🥕', x+30, GROUND-98+wave*0.5);
+  if (active) { glow(x, GROUND-104, 46, true); const ay=GROUND-150+Math.sin(performance.now()/200)*6; ctx.fillStyle='#ff3b6b'; ctx.beginPath(); ctx.moveTo(x-14,ay-12); ctx.lineTo(x+14,ay-12); ctx.lineTo(x,ay+8); ctx.closePath(); ctx.fill(); }
+}
+
+function drawSparklesWorld(kind){ sparkles.forEach(s=>{ if(s.kind!==kind) return; const a=Math.max(0,s.life/s.max); ctx.fillStyle = kind==='burst' ? 'rgba(255,230,120,'+a+')' : 'rgba(180,235,255,'+a+')'; const r=(kind==='burst'?5:4)*a+1; ctx.beginPath(); ctx.arc(s.x,s.y,r,0,7); ctx.fill(); }); }
+function drawPopup(p){ const a=Math.max(0,p.life/1.1); ctx.globalAlpha=a; drawItem(p.type,p.x,p.y,0,true); ctx.fillStyle='rgba(224,113,15,'+a+')'; ctx.font='bold 22px "Comic Sans MS",sans-serif'; ctx.textAlign='center'; ctx.fillText('+1', p.x, p.y-36); ctx.globalAlpha=1; }
+
+// =========================================================================
+//  CHARACTERS
+// =========================================================================
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+function shadowAt(x,y,w){ ctx.fillStyle='rgba(0,0,0,0.15)'; ctx.beginPath(); ctx.ellipse(x,y,w,w*0.3,0,0,7); ctx.fill(); }
+function labelAt(x,y,text){ ctx.font='bold 22px "Comic Sans MS",sans-serif'; ctx.textAlign='center'; const w=ctx.measureText(text).width+24; ctx.fillStyle='rgba(255,255,255,0.92)'; roundRect(x-w/2,y-30,w,30,15); ctx.fill(); ctx.fillStyle='#1c3b57'; ctx.fillText(text,x,y-8); }
+
+function drawCharacter(kind, x, feetY, bob, inAir) {
+  const b = Math.sin(bob)*4;
+  shadowAt(x, GROUND+2, 40 - Math.min(30, (GROUND-feetY)*0.12));
+  ctx.save();
+  ctx.translate(x, feetY - FOOT + b);
+  ctx.save(); ctx.scale(player.dir, 1);
+  if (kind==='anna') drawAnna(inAir); else if (kind==='elsa') drawElsa(inAir);
+  else if (kind==='kristoff') drawKristoff(inAir); else drawSven(inAir);
+  ctx.restore();
+  ctx.restore();
+  labelAt(x, feetY - FOOT - 2, area.who);
+}
+function legs(color, inAir){ ctx.fillStyle=color; if(inAir){ ctx.fillRect(-16,40,12,22); ctx.fillRect(4,40,12,22);} else { ctx.fillRect(-16,40,12,26); ctx.fillRect(4,40,12,26);} ctx.fillStyle='#5b3a1e'; ctx.fillRect(-18,inAir?60:62,16,8); ctx.fillRect(2,inAir?60:62,16,8); }
+function head(skin){ ctx.fillStyle=skin; ctx.beginPath(); ctx.arc(0,-34,22,0,7); ctx.fill(); ctx.fillStyle='#20323f'; ctx.beginPath(); ctx.arc(-8,-36,3,0,7); ctx.arc(8,-36,3,0,7); ctx.fill(); ctx.strokeStyle='#20323f'; ctx.lineWidth=2.5; ctx.beginPath(); ctx.arc(0,-30,8,0.15*Math.PI,0.85*Math.PI); ctx.stroke(); ctx.fillStyle='rgba(255,140,150,0.45)'; ctx.beginPath(); ctx.arc(-13,-28,5,0,7); ctx.arc(13,-28,5,0,7); ctx.fill(); }
+function drawAnna(inAir){ legs('#3a4a63',inAir); ctx.fillStyle='#2f6b3b'; ctx.beginPath(); ctx.moveTo(-22,44); ctx.lineTo(22,44); ctx.lineTo(16,-6); ctx.lineTo(-16,-6); ctx.closePath(); ctx.fill(); ctx.fillStyle='#1c1c26'; ctx.fillRect(-16,-8,32,18); ctx.fillStyle='#b0357a'; ctx.beginPath(); ctx.moveTo(-14,-8); ctx.lineTo(-30,40); ctx.lineTo(-6,40); ctx.closePath(); ctx.fill(); head('#ffe0bd'); ctx.fillStyle='#7a3f22'; ctx.beginPath(); ctx.arc(0,-40,23,Math.PI,0); ctx.fill(); ctx.fillRect(-24,-40,10,40); ctx.fillRect(14,-40,10,40); ctx.fillStyle='#c9c4bd'; ctx.fillRect(-6,-58,4,16); }
+function drawElsa(inAir){ legs('#bfeaff',inAir); ctx.fillStyle='#a9dcf5'; ctx.beginPath(); ctx.moveTo(-22,44); ctx.lineTo(22,44); ctx.lineTo(15,-6); ctx.lineTo(-15,-6); ctx.closePath(); ctx.fill(); ctx.fillStyle='#cbeeff'; ctx.fillRect(-15,-8,30,16); head('#ffe6d0'); ctx.fillStyle='#f3eede'; ctx.beginPath(); ctx.arc(0,-40,23,Math.PI,0); ctx.fill(); ctx.save(); ctx.rotate(0.15); ctx.beginPath(); ctx.ellipse(16,-6,7,26,0,0,7); ctx.fill(); ctx.restore(); ctx.fillStyle='rgba(255,255,255,0.9)'; ctx.beginPath(); ctx.arc(6,20,2.5,0,7); ctx.arc(-6,30,2,0,7); ctx.fill(); }
+function drawKristoff(inAir){ legs('#4a3a2a',inAir); ctx.fillStyle='#6f5334'; ctx.beginPath(); ctx.moveTo(-20,44); ctx.lineTo(20,44); ctx.lineTo(18,-8); ctx.lineTo(-18,-8); ctx.closePath(); ctx.fill(); ctx.fillStyle='#8a6a44'; ctx.fillRect(-18,-8,36,16); ctx.fillStyle='#b0455a'; ctx.fillRect(-16,-6,32,8); head('#f2c79b'); ctx.fillStyle='#caa24b'; ctx.beginPath(); ctx.arc(0,-40,23,Math.PI,0.05*Math.PI); ctx.fill(); ctx.fillRect(-22,-40,44,10); }
+function drawSven(inAir){ ctx.fillStyle='#8a5a2b'; ctx.beginPath(); ctx.ellipse(0,20,30,26,0,0,7); ctx.fill(); ctx.fillStyle='#6f4a24'; if(inAir){ ctx.fillRect(-22,36,9,22); ctx.fillRect(-6,38,9,20); ctx.fillRect(8,38,9,20); ctx.fillRect(20,36,9,22);} else { ctx.fillRect(-22,38,9,26); ctx.fillRect(-6,40,9,24); ctx.fillRect(8,40,9,24); ctx.fillRect(20,38,9,26);} ctx.fillStyle='#8a5a2b'; ctx.beginPath(); ctx.ellipse(6,-22,20,22,0,0,7); ctx.fill(); ctx.fillStyle='#c99b6a'; ctx.beginPath(); ctx.ellipse(20,-14,14,11,0,0,7); ctx.fill(); ctx.fillStyle='#5b3a2a'; ctx.beginPath(); ctx.ellipse(30,-14,6,5,0,0,7); ctx.fill(); ctx.fillStyle='#20323f'; ctx.beginPath(); ctx.arc(10,-26,3.5,0,7); ctx.fill(); ctx.strokeStyle='#b98a4a'; ctx.lineWidth=5; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(2,-40); ctx.lineTo(-4,-58); ctx.moveTo(-4,-58); ctx.lineTo(-16,-60); ctx.moveTo(-4,-58); ctx.lineTo(-2,-70); ctx.moveTo(12,-40); ctx.lineTo(16,-58); ctx.moveTo(16,-58); ctx.lineTo(28,-60); ctx.moveTo(16,-58); ctx.lineTo(14,-70); ctx.stroke(); ctx.fillStyle='#8a5a2b'; ctx.beginPath(); ctx.ellipse(-8,-34,7,5,0.5,0,7); ctx.fill(); }
+
+function drawSnowman(x, y, wave, parts2) {
+  ctx.save(); ctx.translate(x,y);
+  shadowAt(0,42,30);
+  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(0,24,26,0,7); ctx.fill(); ctx.beginPath(); ctx.arc(0,-6,20,0,7); ctx.fill(); ctx.beginPath(); ctx.arc(0,-34,15,0,7); ctx.fill();
+  ctx.fillStyle='#2a2a2a'; ctx.beginPath(); ctx.arc(-5,-36,2.4,0,7); ctx.arc(5,-36,2.4,0,7); ctx.fill();
+  const P = parts2 || { nose:1, arm:2, buttons:1, hair:1 };
+  if (P.buttons){ ctx.beginPath(); ctx.arc(-4,-4,2,0,7); ctx.arc(0,0,2,0,7); ctx.arc(4,4,2,0,7); ctx.fill(); }
+  if (P.nose){ ctx.fillStyle='#ff8a1e'; ctx.beginPath(); ctx.moveTo(2,-32); ctx.lineTo(22,-30); ctx.lineTo(2,-27); ctx.closePath(); ctx.fill(); }
+  ctx.strokeStyle='#2a2a2a'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(0,-30,7,0.1*Math.PI,0.9*Math.PI); ctx.stroke();
+  ctx.strokeStyle='#6b4a2a'; ctx.lineWidth=3; ctx.lineCap='round';
+  const wv = wave ? Math.sin(performance.now()/200)*0.5 : 0;
+  if (P.arm>=1){ ctx.beginPath(); ctx.moveTo(-16,-4); ctx.lineTo(-34,-4-(wave?18:0)+wv*10); ctx.stroke(); }
+  if (P.arm>=2){ ctx.beginPath(); ctx.moveTo(16,-4); ctx.lineTo(34,4); ctx.stroke(); }
+  if (P.hair){ ctx.beginPath(); ctx.moveTo(-4,-48); ctx.lineTo(-8,-58); ctx.moveTo(0,-49); ctx.lineTo(0,-60); ctx.moveTo(4,-48); ctx.lineTo(8,-58); ctx.stroke(); }
+  ctx.restore();
+}
+
+// =========================================================================
+//  HUD / BANNERS
+// =========================================================================
+function drawHUD() {
+  ctx.fillStyle='rgba(28,59,87,0.28)'; roundRect(20,16,330,64,18); ctx.fill();
+  if (story.id === 'carrots') {
+    ctx.font='bold 20px "Comic Sans MS",sans-serif'; ctx.textAlign='left'; ctx.fillStyle='#fff';
+    ctx.fillText("Sven's carrots:", 36, 54);
+    for(let i=0;i<totalItems;i++){ const cx=196+i*24, cy=46; ctx.save(); ctx.translate(cx,cy); ctx.rotate(0.2); ctx.globalAlpha=i<collected?1:0.3; ctx.fillStyle=i<collected?'#ff8a1e':'#fff'; ctx.beginPath(); ctx.moveTo(-7,-9); ctx.lineTo(7,-9); ctx.lineTo(0,13); ctx.closePath(); ctx.fill(); ctx.fillStyle=i<collected?'#3fa35a':'#fff'; ctx.beginPath(); ctx.ellipse(0,-11,3,6,0,0,7); ctx.fill(); ctx.restore(); ctx.globalAlpha=1; }
+  } else {
+    ctx.font='bold 18px "Comic Sans MS",sans-serif'; ctx.textAlign='left'; ctx.fillStyle='#fff';
+    ctx.fillText("Build Olaf:", 36, 40);
+    ctx.fillText(collected + " / " + totalItems, 40, 66);
+    ctx.save(); ctx.translate(150, 66); ctx.scale(0.62,0.62); drawSnowman(0,-30,false,{ nose:parts.nose, arm:parts.arm||0, buttons:parts.buttons, hair:parts.hair }); ctx.restore();
+  }
+  // area title
+  ctx.textAlign='center'; ctx.fillStyle='rgba(28,59,87,0.30)';
+  ctx.font='bold 24px "Comic Sans MS",sans-serif'; const t=area.title, w=ctx.measureText(t).width+40;
+  roundRect(W/2-w/2,16,w,42,16); ctx.fill(); ctx.fillStyle='#fff'; ctx.fillText(t,W/2,45);
+  // controls hint
+  ctx.font='bold 16px "Comic Sans MS",sans-serif'; ctx.fillStyle='rgba(255,255,255,0.85)'; ctx.textAlign='right';
+  ctx.fillText('←  →  move    ↑  jump', W-80, 40);
+}
+function drawSwitchBanner() {
+  ctx.fillStyle='rgba(28,59,87,0.55)'; ctx.fillRect(0,0,W,H);
+  ctx.save(); ctx.translate(W/2,H/2+30); ctx.scale(1.7,1.7);
+  ctx.save(); const k=area.draw; ctx.scale(1,1);
+  if(k==='anna') drawAnna(false); else if(k==='elsa') drawElsa(false); else if(k==='kristoff') drawKristoff(false); else drawSven(false);
+  ctx.restore(); ctx.restore();
+  ctx.textAlign='center'; ctx.fillStyle='#fff'; ctx.font='bold 40px "Comic Sans MS",sans-serif';
+  ctx.fillText('Now you are ' + area.who + '!', W/2, H/2-90);
+  ctx.font='bold 22px "Comic Sans MS",sans-serif';
+  ctx.fillText('←  →  walk      ↑  jump', W/2, H/2+160);
+}
+
+// ---- Menu ----------------------------------------------------------------
+function drawMenu() {
+  ctx.fillStyle=skyGrad('#5b8fd6','#bfe3ff'); ctx.fillRect(0,0,W,H); snow();
+  ctx.textAlign='center';
+  ctx.fillStyle='rgba(255,255,255,0.92)'; roundRect(W/2-330,48,660,96,26); ctx.fill();
+  ctx.fillStyle='#2b6cb0'; ctx.font='bold 46px "Comic Sans MS",sans-serif';
+  ctx.fillText('❄️ ' + NAME + "'s Frozen Games ❄️", W/2, 110);
+
+  const cardW=360, cardH=250, gap=40, totalW=cardW*2+gap, startX=(W-totalW)/2, cy=200;
+  STORIES.forEach((s,i)=>{
+    const x=startX+i*(cardW+gap), sel=i===menuIndex;
+    ctx.fillStyle = sel ? '#ffffff' : 'rgba(255,255,255,0.72)';
+    if (sel){ ctx.strokeStyle='#ff3b6b'; ctx.lineWidth=6; }
+    roundRect(x,cy,cardW,cardH,24); ctx.fill(); if(sel) ctx.stroke();
+    // illustration
+    ctx.save(); ctx.translate(x+cardW/2, cy+120);
+    if (s.id==='carrots'){ ctx.scale(1.5,1.5); drawSven(false); }
+    else { drawSnowman(0,-20,true); }
+    ctx.restore();
+    ctx.fillStyle='#2b6cb0'; ctx.font='bold 28px "Comic Sans MS",sans-serif';
+    ctx.fillText(s.emoji + ' ' + s.title, x+cardW/2, cy+cardH-46);
+    ctx.fillStyle='#1c3b57'; ctx.font='bold 17px "Comic Sans MS",sans-serif';
+    ctx.fillText(s.sub, x+cardW/2, cy+cardH-20);
+  });
+
+  ctx.fillStyle='#fff'; ctx.font='bold 22px "Comic Sans MS",sans-serif';
+  ctx.fillText('←  →  choose', W/2, cy+cardH+50);
+  const pulse=0.6+0.4*Math.abs(Math.sin(performance.now()/500));
+  ctx.fillStyle='rgba(255,59,107,'+pulse+')'; roundRect(W/2-170,cy+cardH+66,340,58,20); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 28px "Comic Sans MS",sans-serif';
+  ctx.fillText('Press  ↑  to Play', W/2, cy+cardH+104);
+}
+
+// ---- Win -----------------------------------------------------------------
+function drawWin() {
+  ctx.fillStyle=skyGrad('#ffd6ec','#dff3ff'); ctx.fillRect(0,0,W,H);
+  confetti.forEach(p=>{ ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.rot); ctx.fillStyle=p.c; ctx.fillRect(-p.s/2,-p.s/2,p.s,p.s*0.6); ctx.restore(); });
+  if (story.id==='olaf') { ctx.save(); ctx.translate(W/2,380); ctx.scale(2.4,2.4); drawSnowman(0,0,true); ctx.restore(); }
+  else { ctx.save(); ctx.translate(W/2,410); ctx.scale(1.8,1.8); drawSven(false); ctx.restore(); for(let i=0;i<6;i++){ ctx.save(); ctx.translate(W/2-100+i*40, 500+Math.sin(performance.now()/400+i)*3); ctx.rotate(0.2); ctx.fillStyle='#ff8a1e'; ctx.beginPath(); ctx.moveTo(-9,-13); ctx.lineTo(9,-13); ctx.lineTo(0,16); ctx.closePath(); ctx.fill(); ctx.fillStyle='#3fa35a'; ctx.beginPath(); ctx.ellipse(0,-15,4,8,0,0,7); ctx.fill(); ctx.restore(); } }
+  ctx.textAlign='center';
+  ctx.fillStyle='rgba(255,255,255,0.92)'; roundRect(W/2-340,64,680,150,28); ctx.fill();
+  ctx.fillStyle='#e0710f'; ctx.font='bold 48px "Comic Sans MS",sans-serif'; ctx.fillText('⭐ Great job, ' + NAME + '! ⭐', W/2, 120);
+  ctx.fillStyle='#2b6cb0'; ctx.font='bold 26px "Comic Sans MS",sans-serif'; ctx.fillText(story.winTitle, W/2, 160);
+  ctx.fillStyle='#1c3b57'; ctx.font='bold 22px "Comic Sans MS",sans-serif'; ctx.fillText(story.winLine, W/2, 195);
+  const pulse=0.6+0.4*Math.abs(Math.sin(performance.now()/500));
+  ctx.fillStyle='rgba(63,163,90,'+pulse+')'; roundRect(W/2-200,528,400,56,20); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 24px "Comic Sans MS",sans-serif'; ctx.fillText('Press  ↑  for the menu', W/2, 564);
+}
+
+// =========================================================================
+//  MAIN LOOP
+// =========================================================================
+function frame(t) {
+  if (!lastT) lastT = t;
+  let dt = (t - lastT) / 1000; lastT = t;
+  if (dt > 0.05) dt = 0.05;
+  update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
