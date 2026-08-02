@@ -22,6 +22,7 @@
   #muteBtn { right: 12px; }
   #homeBtn { right: 78px; }
   #nameBtn { right: 144px; font-size: 22px; }
+  #setBtn  { right: 210px; font-size: 24px; }
   .cornerBtn:active { transform: scale(0.94); }
 
   /* Name-entry overlay (a grown-up types the player's name) */
@@ -52,6 +53,23 @@
   }
   .nameBtn:active { transform: scale(0.97); }
 
+  /* Settings panel toggle rows */
+  .setCard { text-align: left; }
+  .setRow {
+    display: flex; align-items: center; justify-content: space-between;
+    width: 100%; box-sizing: border-box; margin-top: 10px;
+    font-family: inherit; font-size: 20px; font-weight: bold; color: #1c3b57;
+    background: #eef6fd; border: 2px solid #cfe6f7; border-radius: 14px;
+    padding: 12px 16px; cursor: pointer;
+  }
+  .setRow:active { transform: scale(0.98); }
+  .setState {
+    font-size: 16px; font-weight: bold; color: #fff; background: #bcc7d1;
+    border-radius: 12px; padding: 4px 12px; min-width: 46px; text-align: center;
+  }
+  .setRow.on .setState { background: #3fa35a; }
+  #setDone { margin-top: 18px; }
+
   /* On-screen touch controls — shown only on touch devices */
   .touchControls { display: none; }
   body.touch .touchControls { display: block; }
@@ -75,6 +93,19 @@
 <button id="homeBtn" class="cornerBtn" title="Back to menu" aria-label="Back to menu">🏠</button>
 <button id="muteBtn" class="cornerBtn" title="Sound on/off" aria-label="Sound on or off">🔊</button>
 <button id="nameBtn" class="cornerBtn" title="Change name" aria-label="Change name">✏️</button>
+<button id="setBtn" class="cornerBtn" title="Settings" aria-label="Settings">⚙️</button>
+
+<div id="setScreen" class="overlay" hidden>
+  <div class="nameCard setCard">
+    <div class="nameTitle" style="text-align:center">⚙️ Settings</div>
+    <button class="setRow" data-key="voice"><span>🗣️ Talking</span><span class="setState">On</span></button>
+    <button class="setRow" data-key="music"><span>🎵 Music</span><span class="setState">On</span></button>
+    <button class="setRow" data-key="reduceMotion"><span>🌙 Calmer motion</span><span class="setState">Off</span></button>
+    <button class="setRow" data-key="bigChar"><span>🧸 Bigger hero</span><span class="setState">Off</span></button>
+    <button class="setRow" data-key="slow"><span>🐢 Slower moving</span><span class="setState">Off</span></button>
+    <button id="setDone" class="nameBtn">Done</button>
+  </div>
+</div>
 
 <div id="nameScreen" class="overlay" hidden>
   <div class="nameCard">
@@ -193,12 +224,82 @@ muteBtn.addEventListener('click', () => { muted = !muted; muteBtn.textContent = 
 const homeBtn = document.getElementById('homeBtn');
 homeBtn.addEventListener('click', () => { state = 'menu'; keys.ArrowLeft=keys.ArrowRight=keys.ArrowUp=keys.ArrowDown=false; });
 
+// ---- Settings (remembered), narration & background music -----------------
+const SET_KEY = 'owensFrozenGames.settings';
+const prefersReduce = (() => { try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch(e){ return false; } })();
+let settings = { voice:true, music:true, reduceMotion:prefersReduce, bigChar:false, slow:false };
+(function loadSettings(){ try { const s = JSON.parse(localStorage.getItem(SET_KEY)); if (s && typeof s === 'object') settings = Object.assign(settings, s); } catch(e){} })();
+function saveSettings(){ try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch(e){} }
+function RM(){ return settings.reduceMotion; }
+
+// Spoken narration (Web Speech API, no files). Cancels itself so lines don't stack.
+let voices = [];
+function loadVoices(){ try { voices = window.speechSynthesis.getVoices() || []; } catch(e){ voices = []; } }
+if ('speechSynthesis' in window) { loadVoices(); try { window.speechSynthesis.onvoiceschanged = loadVoices; } catch(e){} }
+function say(text){
+  if (!settings.voice || muted || !text) return;
+  if (!('speechSynthesis' in window)) return;
+  try {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = 0.95; u.pitch = 1.15; u.volume = 0.9;
+    const v = voices.find(v => /en[-_](US|GB)/i.test(v.lang)) || voices.find(v => /^en/i.test(v.lang));
+    if (v) u.voice = v;
+    window.speechSynthesis.speak(u);
+  } catch(e){}
+}
+const NUMWORDS = ['zero','one','two','three','four','five','six','seven','eight','nine','ten','eleven','twelve','thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen','twenty'];
+function numWord(n){ return NUMWORDS[n] || String(n); }
+
+// Gentle looping music — soft triangle notes scheduled a beat at a time.
+let musicPlaying = false, musicTimer = null, musicStep = 0;
+const MELODY = [261.63,329.63,392.00,329.63, 220.00,261.63,329.63,261.63, 174.61,220.00,261.63,220.00, 196.00,246.94,293.66,392.00];
+function softNote(freq, dur, vol){
+  if (!audioCtx || muted) return;
+  const t0 = audioCtx.currentTime;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = 'triangle'; o.frequency.value = freq;
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(vol, t0 + 0.05);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(t0); o.stop(t0 + dur + 0.06);
+}
+function musicTick(){
+  if (!musicPlaying) return;
+  const f = MELODY[musicStep % MELODY.length];
+  softNote(f, 0.5, 0.05);
+  if (musicStep % 4 === 0) softNote(f/2, 0.9, 0.04);   // gentle bass
+  musicStep++;
+  musicTimer = setTimeout(musicTick, 430);
+}
+function startMusic(){ if (musicPlaying) return; musicPlaying = true; musicStep = 0; musicTick(); }
+function stopMusic(){ musicPlaying = false; if (musicTimer){ clearTimeout(musicTimer); musicTimer = null; } }
+
+function sfxHi(){ tone(880,0,0.10,'sine',0.12); tone(1174,0.08,0.13,'sine',0.12); }   // friendly critter chime
+
+// ---- Settings panel wiring ----------------------------------------------
+let setOpen = false;
+const setScreen = document.getElementById('setScreen');
+const setBtn = document.getElementById('setBtn');
+function refreshSetRow(btn){ const on = !!settings[btn.dataset.key]; btn.classList.toggle('on', on); btn.querySelector('.setState').textContent = on ? 'On' : 'Off'; }
+function openSettings(){ setOpen = true; document.querySelectorAll('.setRow').forEach(refreshSetRow); setScreen.hidden = false; initAudio(); }
+function closeSettings(){ setOpen = false; setScreen.hidden = true; saveSettings(); }
+setBtn.addEventListener('click', openSettings);
+document.getElementById('setDone').addEventListener('click', closeSettings);
+document.querySelectorAll('.setRow').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const k = btn.dataset.key; settings[k] = !settings[k]; refreshSetRow(btn); saveSettings();
+    if (k === 'voice' && !settings.voice) { try { window.speechSynthesis.cancel(); } catch(e){} }
+  });
+});
+
 // ---- Input: arrows only --------------------------------------------------
 const keys = {};
 const ARROWS = { ArrowUp:1, ArrowDown:1, ArrowLeft:1, ArrowRight:1 };
 window.addEventListener('keydown', (e) => {
   if (!ARROWS[e.key]) return;
-  if (nameOpen) return;                 // let the name box keep focus
+  if (nameOpen || setOpen) return;      // let overlays keep focus
   e.preventDefault(); keys[e.key] = true; initAudio();
   if (!e.repeat) onPress(e.key);
 });
@@ -224,17 +325,37 @@ bindHold(document.getElementById('rightBtn'), 'ArrowRight');
 bindHold(document.getElementById('jumpBtn'),  'ArrowUp');
 
 function onPress(key) {
-  if (nameOpen) return;
+  if (nameOpen || setOpen) return;
   if (state === 'menu') {
     if (key === 'ArrowLeft')  { menuIndex = (menuIndex + STORIES.length - 1) % STORIES.length; sfxTick(); }
     if (key === 'ArrowRight') { menuIndex = (menuIndex + 1) % STORIES.length; sfxTick(); }
     if (key === 'ArrowUp')    { startStory(menuIndex); }
+  } else if (state === 'choose') {
+    if (key === 'ArrowLeft')  { charIndex = (charIndex + CHARS.length - 1) % CHARS.length; sfxTick(); }
+    if (key === 'ArrowRight') { charIndex = (charIndex + 1) % CHARS.length; sfxTick(); }
+    if (key === 'ArrowUp')    { beginStory(); }
   } else if (state === 'play') {
     if (key === 'ArrowUp') player.wantJump = true;
   } else if (state === 'win') {
     if (key === 'ArrowUp') { state = 'menu'; }
   }
 }
+
+// Tap directly on a story / character card (great for little ones on tablets)
+let menuHits = [], chooseHits = [];
+function inRect(px, py, r){ return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h; }
+canvas.addEventListener('pointerdown', (e) => {
+  if (nameOpen || setOpen) return;
+  initAudio();
+  const vx = (e.clientX - offX) / scale, vy = (e.clientY - offY) / scale;
+  if (state === 'menu') {
+    for (const h of menuHits) if (inRect(vx, vy, h)) { menuIndex = h.i; startStory(h.i); return; }
+  } else if (state === 'choose') {
+    for (const h of chooseHits) if (inRect(vx, vy, h)) { charIndex = h.i; beginStory(); return; }
+  } else if (state === 'win') {
+    state = 'menu';
+  }
+});
 
 // =========================================================================
 //  STORY / LEVEL DATA
@@ -260,13 +381,15 @@ function buildArea(title, who, drawKind, theme, itemTypes, variant) {
   else if (itemTypes.length === 2) chosen = [spots[0], spots[2]];
   else chosen = spots.slice(0, itemTypes.length);
   const items = itemTypes.map((t, i) => ({ x: chosen[i].x, y: chosen[i].y, type: t, got: false, wob: i }));
-  return { title, who, draw: drawKind, theme, variant: variant || 0, worldW, platforms, items, flagX: worldW - 150 };
+  const friend = { x: 1300, cool: 0, hop: 0 };   // a snow-bunny to say hello to
+  return { title, who, draw: drawKind, theme, variant: variant || 0, worldW, platforms, items, friend, flagX: worldW - 150 };
 }
 
 const STORIES = [
   {
     id: 'carrots', title: "Sven's Lost Carrots", emoji: "🥕",
     sub: "Find Sven's carrots in Elsa's ice castle!",
+    find: "Find the carrots!",
     winTitle: "You found all of Sven's carrots!",
     winLine: "Sven says thank you! 🦌🥕",
     areas: [
@@ -279,6 +402,7 @@ const STORIES = [
   {
     id: 'olaf', title: "Olaf's Missing Pieces", emoji: "⛄",
     sub: "Gale blew Olaf apart! Find his pieces!",
+    find: "Find Olaf's pieces!",
     winTitle: "You put Olaf back together!",
     winLine: "Olaf says: I like warm hugs! ⛄",
     areas: [
@@ -288,36 +412,81 @@ const STORIES = [
       buildArea("Snowy Woods",    "Sven",     "sven",     "woods",    ["buttons","hair"]),
     ],
   },
+  {
+    id: 'snowgies', title: "Little Snowgies", emoji: "⛄",
+    sub: "Olaf's tiny snowgies are hiding!",
+    find: "Find the snowgies!",
+    winTitle: "You found all the snowgies!",
+    winLine: "The snowgies giggle with joy! ⛄✨",
+    areas: [
+      buildArea("Castle Garden",  "Anna",     "anna",     "garden",   ["snowgie","snowgie"]),
+      buildArea("Frozen Lake",    "Elsa",     "elsa",     "lake",     ["snowgie"]),
+      buildArea("North Mountain", "Kristoff", "kristoff", "mountain", ["snowgie","snowgie"]),
+      buildArea("Snowy Woods",    "Sven",     "sven",     "woods",    ["snowgie"]),
+    ],
+  },
 ];
+
+// Characters the player can choose to be (last option keeps the classic
+// per-room switching where you become whoever lives in that room).
+const CHARS = [
+  { key:'anna',     name:'Anna' },
+  { key:'elsa',     name:'Elsa' },
+  { key:'kristoff', name:'Kristoff' },
+  { key:'sven',     name:'Sven' },
+  { key:'everyone', name:'Everyone!' },
+];
+function charName(key){ const c = CHARS.find(c => c.key === key); return c ? c.name : key; }
 
 // =========================================================================
 //  GAME STATE
 // =========================================================================
-let state = 'menu';         // menu | play | switching | win
-let menuIndex = 0;
+let state = 'menu';         // menu | choose | play | switching | win
+let menuIndex = 0, charIndex = 0, playChar = 'everyone';
 let story = null, area = null, areaIndex = 0;
 let totalItems = 0, collected = 0, parts = {};
 let cameraX = 0, stateTime = 0, lastT = 0;
+let areaCleared = false, clearTimer = 0;
 
 const player = { x: 120, y: GROUND, vy: 0, dir: 1, onGround: true, moving: false, bob: 0, wantJump: false };
 let sparkles = [], popups = [], confetti = [];
 
 function currentArea() { return story.areas[areaIndex]; }
+// The character actually being played in the current room (respects the pick).
+function areaDraw(){ return (playChar && playChar !== 'everyone') ? playChar : area.draw; }
+function areaWho(){  return (playChar && playChar !== 'everyone') ? charName(playChar) : area.who; }
 
 function startStory(idx) {
   story = STORIES[idx];
   story.areas.forEach(a => a.items.forEach(it => it.got = false));
   totalItems = story.areas.reduce((n,a)=> n + a.items.length, 0);
   collected = 0; parts = {};
-  areaIndex = 0;
+  areaIndex = 0; charIndex = 0;
+  state = 'choose'; stateTime = 0;
+  sfxTick(); say("Who do you want to be?");
+}
+function beginStory() {
+  playChar = CHARS[charIndex].key;
   loadArea();
   sfxSwitch();
   state = 'switching'; stateTime = 0;
+  announceArea();
+}
+function announceArea() {
+  const who = areaWho();
+  const lead = (playChar === 'everyone') ? ("Now you are " + who + "! ") : "";
+  say(lead + story.find);
+}
+function advanceArea() {
+  if (areaIndex < story.areas.length - 1) { areaIndex++; loadArea(); sfxSwitch(); state = 'switching'; stateTime = 0; announceArea(); }
+  else winGame();
 }
 function loadArea() {
   area = currentArea();
   player.x = 110; player.y = GROUND; player.vy = 0; player.onGround = true; player.dir = 1; player.wantJump = false;
   cameraX = 0; sparkles = []; popups = [];
+  areaCleared = false; clearTimer = 0;
+  if (area.friend) { area.friend.cool = 0; area.friend.hop = 0; }
 }
 function areaItemsLeft() { return area.items.some(it => !it.got); }
 
@@ -333,9 +502,19 @@ function update(dt) {
     confetti.forEach(p => { p.x += p.vx*dt; p.y += p.vy*dt; p.rot += p.vr*dt; if (p.y > H+20){ p.y=-20; p.x=Math.random()*W; } });
   }
 
-  // sparkles & popups
-  for (let i = sparkles.length-1; i>=0; i--){ const s=sparkles[i]; s.life-=dt; if(s.kind==='burst'){ s.x+=s.vx*dt; s.y+=s.vy*dt; s.vy+=300*dt; } if(s.life<=0) sparkles.splice(i,1); }
+  // sparkles, hearts & popups
+  for (let i = sparkles.length-1; i>=0; i--){
+    const s = sparkles[i]; s.life -= dt;
+    if (s.kind === 'burst') { s.x += s.vx*dt; s.y += s.vy*dt; s.vy += 300*dt; }
+    else if (s.kind === 'heart') { s.x += s.vx*dt; s.y += s.vy*dt; s.vy += 26*dt; }
+    if (s.life <= 0) sparkles.splice(i,1);
+  }
   for (let i = popups.length-1; i>=0; i--){ const p=popups[i]; p.life-=dt; p.y-=40*dt; if(p.life<=0) popups.splice(i,1); }
+
+  // Background music follows the play states and the mute / music settings.
+  const wantMusic = settings.music && !muted && (state === 'play' || state === 'switching' || state === 'choose');
+  if (wantMusic && !musicPlaying) startMusic();
+  else if (!wantMusic && musicPlaying) stopMusic();
 }
 
 function updatePlay(dt) {
@@ -345,7 +524,8 @@ function updatePlay(dt) {
   if (keys.ArrowRight) dx += 1;
   player.moving = dx !== 0;
   if (dx !== 0) player.dir = dx > 0 ? 1 : -1;
-  player.x += dx * MOVE * dt;
+  const curMove = MOVE * (settings.slow ? 0.62 : 1);
+  player.x += dx * curMove * dt;
   player.x = Math.max(40, Math.min(area.worldW - 40, player.x));
   if (player.moving && player.onGround) { player.bob += dt*10; if (Math.random()<0.06) sfxStep(); }
 
@@ -370,8 +550,8 @@ function updatePlay(dt) {
   // ground
   if (player.y >= GROUND) { player.y = GROUND; player.vy = 0; player.onGround = true; }
 
-  // Elsa sparkle trail
-  if (area.draw === 'elsa' && (player.moving || !player.onGround) && Math.random() < 0.6)
+  // Elsa sparkle trail (calmer when reduced-motion is on)
+  if (areaDraw() === 'elsa' && (player.moving || !player.onGround) && Math.random() < (RM() ? 0.25 : 0.6))
     sparkles.push({ x: player.x + (Math.random()*24-12), y: player.y - 30, life: 0.7, max: 0.7, kind:'trail' });
 
   // collect
@@ -383,15 +563,32 @@ function updatePlay(dt) {
       it.got = true; collected++;
       parts[it.type] = (parts[it.type] || 0) + 1;
       sfxCollect();
-      popups.push({ x: it.x, y: it.y - 20, life: 1.1, type: it.type });
-      for (let i=0;i<22;i++){ const a=Math.random()*Math.PI*2, sp=60+Math.random()*150; sparkles.push({x:it.x,y:it.y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,max:1,kind:'burst'}); }
+      say(numWord(collected));                                   // count out loud
+      popups.push({ x: it.x, y: it.y - 20, life: 1.2, type: it.type, count: collected });
+      const burst = RM() ? 8 : 22;
+      for (let i=0;i<burst;i++){ const a=Math.random()*Math.PI*2, sp=60+Math.random()*150; sparkles.push({x:it.x,y:it.y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,max:1,kind:'burst'}); }
     }
   }
 
-  // reach the flag when the area is cleared
-  if (!areaItemsLeft() && player.onGround && Math.abs(player.x - area.flagX) < 55) {
-    if (areaIndex < story.areas.length - 1) { areaIndex++; loadArea(); sfxSwitch(); state='switching'; stateTime=0; }
-    else { winGame(); }
+  // friendly snow-bunny: hops, pops hearts and chimes when you come near
+  const f = area.friend;
+  if (f) {
+    f.hop = Math.max(0, f.hop - dt);
+    f.cool = Math.max(0, f.cool - dt);
+    if (Math.abs(player.x - f.x) < 72 && f.cool <= 0) {
+      f.cool = 1.6; f.hop = 0.6; sfxHi();
+      const nh = RM() ? 3 : 6;
+      for (let i=0;i<nh;i++) sparkles.push({ x: f.x + (Math.random()*30-15), y: GROUND-60, vx: (Math.random()*40-20), vy: -40-Math.random()*40, life: 1.1, max: 1.1, kind:'heart' });
+    }
+  }
+
+  // Area cleared → celebrate once, then advance when they reach the flag
+  // (or automatically after a short beat, so no one gets stuck).
+  if (!areaItemsLeft()) {
+    if (!areaCleared) { areaCleared = true; clearTimer = 0; say("You found them all!"); }
+    clearTimer += dt;
+    const atFlag = player.onGround && Math.abs(player.x - area.flagX) < 55;
+    if (atFlag || clearTimer > 3.0) advanceArea();
   }
 
   // camera follows player
@@ -400,8 +597,10 @@ function updatePlay(dt) {
 
 function winGame() {
   confetti = [];
-  for (let i=0;i<150;i++) confetti.push({ x:Math.random()*W, y:-Math.random()*H, vy:60+Math.random()*130, vx:Math.random()*40-20, rot:Math.random()*Math.PI, vr:Math.random()*6-3, c:['#ff6b9d','#7ed0ff','#ffd93b','#8affc1','#c8a2ff','#fff'][Math.floor(Math.random()*6)], s:8+Math.random()*8 });
+  const n = RM() ? 45 : 150, vscale = RM() ? 0.6 : 1;
+  for (let i=0;i<n;i++) confetti.push({ x:Math.random()*W, y:-Math.random()*H, vy:(60+Math.random()*130)*vscale, vx:Math.random()*40-20, rot:Math.random()*Math.PI, vr:Math.random()*6-3, c:['#ff6b9d','#7ed0ff','#ffd93b','#8affc1','#c8a2ff','#fff'][Math.floor(Math.random()*6)], s:8+Math.random()*8 });
   sfxWin(); state='win'; stateTime=0;
+  say("Great job, " + NAME + "! " + story.winTitle);
 }
 
 // =========================================================================
@@ -415,17 +614,20 @@ function draw() {
   ctx.beginPath(); ctx.rect(0,0,W,H); ctx.clip();
 
   if (state === 'menu') drawMenu();
+  else if (state === 'choose') drawChoose();
   else if (state === 'win') drawWin();
   else {
     drawSky(area.theme);
     ctx.save(); ctx.translate(-cameraX, 0);
       drawGroundWorld(area);
       area.platforms.forEach(p => drawPlatform(p, area.theme));
+      if (area.friend) drawBunny(area.friend.x, GROUND, area.friend.hop);
       area.items.forEach(it => { if (!it.got) { drawItem(it.type, it.x, it.y, it.wob, false); drawHintArrow(it.x, it.y, it.wob); } });
-      if (!areaItemsLeft()) drawFlag(area.flagX, true); else drawFlag(area.flagX, false);
+      drawFlag(area.flagX, !areaItemsLeft(), story.emoji);
       drawSparklesWorld('trail');
-      drawCharacter(area.draw, player.x, player.y, player.dir, player.moving && player.onGround ? player.bob : 0, !player.onGround);
+      drawCharacter(areaDraw(), player.x, player.y, player.moving && player.onGround ? player.bob : 0, !player.onGround);
       drawSparklesWorld('burst');
+      drawHeartsWorld();
       popups.forEach(p => drawPopup(p));
     ctx.restore();
     drawHUD();
@@ -493,7 +695,7 @@ function cloud(x,y){ ctx.fillStyle='rgba(255,255,255,0.85)'; ctx.beginPath(); ct
 function farMtn(cx,baseY,w,h){ ctx.beginPath(); ctx.moveTo(cx-w/2,baseY); ctx.lineTo(cx,baseY-h); ctx.lineTo(cx+w/2,baseY); ctx.closePath(); ctx.fill(); }
 function peak(cx,topY,w){ ctx.beginPath(); ctx.moveTo(cx-w/2,topY+w*0.7); ctx.lineTo(cx,topY); ctx.lineTo(cx+w/2,topY+w*0.7); ctx.closePath(); ctx.fill(); }
 let snowFlakes=null;
-function snow(){ if(!snowFlakes){ snowFlakes=[]; for(let i=0;i<55;i++) snowFlakes.push({x:Math.random()*W,y:Math.random()*H,r:1+Math.random()*3,s:15+Math.random()*30}); } ctx.fillStyle='rgba(255,255,255,0.9)'; const t=performance.now()/1000; snowFlakes.forEach(f=>{ const yy=(f.y+t*f.s)%H, xx=f.x+Math.sin((yy+f.x)/40)*8; ctx.beginPath(); ctx.arc(xx,yy,f.r,0,7); ctx.fill(); }); }
+function snow(){ if(!snowFlakes){ snowFlakes=[]; for(let i=0;i<55;i++) snowFlakes.push({x:Math.random()*W,y:Math.random()*H,r:1+Math.random()*3,s:15+Math.random()*30}); } ctx.fillStyle='rgba(255,255,255,0.9)'; const t=performance.now()/1000; const count=RM()?16:55, speed=RM()?0.35:1, sway=RM()?0:8; for(let i=0;i<count;i++){ const f=snowFlakes[i]; const yy=(f.y+t*f.s*speed)%H, xx=f.x+Math.sin((yy+f.x)/40)*sway; ctx.beginPath(); ctx.arc(xx,yy,f.r,0,7); ctx.fill(); } }
 
 // ---- Ground + decorations (world space) ----------------------------------
 function drawGroundWorld(a) {
@@ -580,6 +782,49 @@ function drawItem(type, x, y, wob, bright) {
   else if (type==='arm') drawArm(x,y);
   else if (type==='buttons') drawButtons(x,y);
   else if (type==='hair') drawHair(x,y);
+  else if (type==='snowgie') drawSnowgie(x,y);
+}
+// A snowgie — Olaf's tiny snowman friend
+function drawSnowgie(x,y){
+  ctx.save(); ctx.translate(x,y);
+  ctx.fillStyle='#fff';
+  ctx.beginPath(); ctx.arc(0,8,15,0,7); ctx.fill();       // body
+  ctx.beginPath(); ctx.arc(0,-9,11,0,7); ctx.fill();      // head
+  ctx.fillStyle='#20323f';
+  ctx.beginPath(); ctx.arc(-4,-10,1.8,0,7); ctx.arc(4,-10,1.8,0,7); ctx.fill();   // eyes
+  ctx.fillStyle='#ff8a1e'; ctx.beginPath(); ctx.moveTo(0,-6); ctx.lineTo(9,-4); ctx.lineTo(0,-2); ctx.closePath(); ctx.fill();  // nose
+  ctx.strokeStyle='#20323f'; ctx.lineWidth=1.6; ctx.beginPath(); ctx.arc(0,-4,4,0.1*Math.PI,0.9*Math.PI); ctx.stroke();       // smile
+  ctx.strokeStyle='#6b4a2a'; ctx.lineWidth=2.2; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(-13,6); ctx.lineTo(-22,0); ctx.moveTo(13,6); ctx.lineTo(22,0); ctx.stroke();   // arms
+  ctx.restore();
+}
+// Friendly snow-bunny that hops when the hero comes near
+function drawBunny(x, groundY, hop){
+  const lift = hop > 0 ? Math.sin((1 - hop/0.6) * Math.PI) * 16 : 0;
+  shadowAt(x, groundY+2, 18);
+  ctx.save(); ctx.translate(x, groundY - 16 - lift);
+  ctx.fillStyle='#fff';
+  ctx.beginPath(); ctx.arc(-14,4,5,0,7); ctx.fill();                 // tail
+  ctx.beginPath(); ctx.ellipse(0,0,16,14,0,0,7); ctx.fill();         // body
+  ctx.beginPath(); ctx.arc(6,-13,10,0,7); ctx.fill();                // head
+  ctx.beginPath(); ctx.ellipse(3,-27,3.4,10,-0.15,0,7); ctx.ellipse(10,-27,3.4,10,0.15,0,7); ctx.fill();  // ears
+  ctx.fillStyle='#ffd0dd'; ctx.beginPath(); ctx.ellipse(3,-27,1.5,6,-0.15,0,7); ctx.ellipse(10,-27,1.5,6,0.15,0,7); ctx.fill();
+  ctx.fillStyle='#33323a'; ctx.beginPath(); ctx.arc(4,-14,1.6,0,7); ctx.arc(11,-14,1.6,0,7); ctx.fill();  // eyes
+  ctx.fillStyle='#ff8aa8'; ctx.beginPath(); ctx.arc(8,-10,1.8,0,7); ctx.fill();                            // nose
+  ctx.restore();
+}
+function drawHeartsWorld(){
+  sparkles.forEach(s => {
+    if (s.kind !== 'heart') return;
+    const a = Math.max(0, s.life/s.max), r = 5;
+    ctx.save(); ctx.globalAlpha = a; ctx.translate(s.x, s.y); ctx.fillStyle = '#ff6b9d';
+    ctx.beginPath();
+    ctx.moveTo(0, r*0.9);
+    ctx.bezierCurveTo(r*1.3, -r*0.4, r*0.5, -r*1.3, 0, -r*0.4);
+    ctx.bezierCurveTo(-r*0.5, -r*1.3, -r*1.3, -r*0.4, 0, r*0.9);
+    ctx.fill(); ctx.restore();
+  });
+  ctx.globalAlpha = 1;
 }
 function drawCarrotShape(x,y){ ctx.save(); ctx.translate(x,y); ctx.rotate(0.25); ctx.fillStyle='#ff8a1e'; ctx.beginPath(); ctx.moveTo(-15,-24); ctx.lineTo(15,-24); ctx.lineTo(0,32); ctx.closePath(); ctx.fill(); ctx.strokeStyle='#e0710f'; ctx.lineWidth=2; for(let i=-1;i<=1;i++){ ctx.beginPath(); ctx.moveTo(i*7,-16); ctx.lineTo(i*5,8); ctx.stroke(); } ctx.fillStyle='#3fa35a'; for(let i=-1;i<=1;i++){ ctx.beginPath(); ctx.ellipse(i*7,-28,5,14,i*0.4,0,7); ctx.fill(); } ctx.restore(); }
 function drawArm(x,y){ ctx.save(); ctx.translate(x,y); ctx.rotate(-0.3); ctx.strokeStyle='#6b4a2a'; ctx.lineWidth=6; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(-22,10); ctx.lineTo(22,-10); ctx.moveTo(6,-2); ctx.lineTo(16,-14); ctx.moveTo(6,-2); ctx.lineTo(18,4); ctx.stroke(); ctx.restore(); }
@@ -588,19 +833,19 @@ function drawHair(x,y){ ctx.strokeStyle='#6b4a2a'; ctx.lineWidth=4; ctx.lineCap=
 
 function drawHintArrow(x, y, wob){ const ay = y - 60 + Math.sin(wob*3)*6; ctx.fillStyle='#ff3b6b'; ctx.beginPath(); ctx.moveTo(x-14,ay-12); ctx.lineTo(x+14,ay-12); ctx.lineTo(x,ay+8); ctx.closePath(); ctx.fill(); }
 
-function drawFlag(x, active) {
+function drawFlag(x, active, emoji) {
   ctx.strokeStyle = active ? '#8a5a2b' : '#9aa4ad'; ctx.lineWidth=6; ctx.lineCap='round';
   ctx.beginPath(); ctx.moveTo(x, GROUND); ctx.lineTo(x, GROUND-120); ctx.stroke();
   const wave = active ? Math.sin(performance.now()/200)*6 : 0;
   ctx.fillStyle = active ? '#ff3b6b' : '#c7ced4';
   ctx.beginPath(); ctx.moveTo(x, GROUND-120); ctx.lineTo(x+60, GROUND-105+wave); ctx.lineTo(x, GROUND-88); ctx.closePath(); ctx.fill();
   ctx.fillStyle='#fff'; ctx.font='bold 20px "Comic Sans MS",sans-serif'; ctx.textAlign='center';
-  ctx.fillText('🥕', x+30, GROUND-98+wave*0.5);
+  ctx.fillText(emoji || '🥕', x+30, GROUND-98+wave*0.5);
   if (active) { glow(x, GROUND-104, 46, true); const ay=GROUND-150+Math.sin(performance.now()/200)*6; ctx.fillStyle='#ff3b6b'; ctx.beginPath(); ctx.moveTo(x-14,ay-12); ctx.lineTo(x+14,ay-12); ctx.lineTo(x,ay+8); ctx.closePath(); ctx.fill(); }
 }
 
 function drawSparklesWorld(kind){ sparkles.forEach(s=>{ if(s.kind!==kind) return; const a=Math.max(0,s.life/s.max); ctx.fillStyle = kind==='burst' ? 'rgba(255,230,120,'+a+')' : 'rgba(180,235,255,'+a+')'; const r=(kind==='burst'?5:4)*a+1; ctx.beginPath(); ctx.arc(s.x,s.y,r,0,7); ctx.fill(); }); }
-function drawPopup(p){ const a=Math.max(0,p.life/1.1); ctx.globalAlpha=a; drawItem(p.type,p.x,p.y,0,true); ctx.fillStyle='rgba(224,113,15,'+a+')'; ctx.font='bold 22px "Comic Sans MS",sans-serif'; ctx.textAlign='center'; ctx.fillText('+1', p.x, p.y-36); ctx.globalAlpha=1; }
+function drawPopup(p){ const a=Math.max(0,p.life/1.2); ctx.globalAlpha=a; drawItem(p.type,p.x,p.y,0,true); ctx.fillStyle='rgba(224,113,15,'+a+')'; ctx.strokeStyle='rgba(255,255,255,'+a+')'; ctx.lineWidth=4; ctx.font='bold 40px "Comic Sans MS",sans-serif'; ctx.textAlign='center'; const t=String(p.count||1); ctx.strokeText(t, p.x, p.y-40); ctx.fillText(t, p.x, p.y-40); ctx.globalAlpha=1; }
 
 // =========================================================================
 //  CHARACTERS
@@ -613,15 +858,17 @@ function fitText(text, x, y, maxW, size){ let fs=size; ctx.font='bold '+fs+'px "
 
 function drawCharacter(kind, x, feetY, bob, inAir) {
   const b = Math.sin(bob)*4;
-  shadowAt(x, GROUND+2, 40 - Math.min(30, (GROUND-feetY)*0.12));
+  const S = settings.bigChar ? 1.28 : 1;
+  shadowAt(x, GROUND+2, (40 - Math.min(30, (GROUND-feetY)*0.12)) * S);
   ctx.save();
   ctx.translate(x, feetY - FOOT + b);
   ctx.save(); ctx.scale(player.dir, 1);
+  if (S !== 1) { ctx.translate(0, FOOT); ctx.scale(S, S); ctx.translate(0, -FOOT); }   // grow, feet planted
   if (kind==='anna') drawAnna(inAir); else if (kind==='elsa') drawElsa(inAir);
   else if (kind==='kristoff') drawKristoff(inAir); else drawSven(inAir);
   ctx.restore();
   ctx.restore();
-  labelAt(x, feetY - FOOT - 2, area.who);
+  labelAt(x, feetY - FOOT - 2 - (S-1)*FOOT, areaWho());
 }
 function legs(color, inAir){ ctx.fillStyle=color; if(inAir){ ctx.fillRect(-16,40,12,22); ctx.fillRect(4,40,12,22);} else { ctx.fillRect(-16,40,12,26); ctx.fillRect(4,40,12,26);} ctx.fillStyle='#5b3a1e'; ctx.fillRect(-18,inAir?60:62,16,8); ctx.fillRect(2,inAir?60:62,16,8); }
 function head(skin){ ctx.fillStyle=skin; ctx.beginPath(); ctx.arc(0,-34,22,0,7); ctx.fill(); ctx.fillStyle='#20323f'; ctx.beginPath(); ctx.arc(-8,-36,3,0,7); ctx.arc(8,-36,3,0,7); ctx.fill(); ctx.strokeStyle='#20323f'; ctx.lineWidth=2.5; ctx.beginPath(); ctx.arc(0,-30,8,0.15*Math.PI,0.85*Math.PI); ctx.stroke(); ctx.fillStyle='rgba(255,140,150,0.45)'; ctx.beginPath(); ctx.arc(-13,-28,5,0,7); ctx.arc(13,-28,5,0,7); ctx.fill(); }
@@ -652,20 +899,43 @@ function drawSnowman(x, y, wave, parts2) {
 // =========================================================================
 function drawHUD() {
   ctx.fillStyle='rgba(28,59,87,0.28)'; roundRect(20,16,330,64,18); ctx.fill();
-  if (story.id === 'carrots') {
-    ctx.font='bold 20px "Comic Sans MS",sans-serif'; ctx.textAlign='left'; ctx.fillStyle='#fff';
-    ctx.fillText("Sven's carrots:", 36, 54);
-    for(let i=0;i<totalItems;i++){ const cx=196+i*24, cy=46; ctx.save(); ctx.translate(cx,cy); ctx.rotate(0.2); ctx.globalAlpha=i<collected?1:0.3; ctx.fillStyle=i<collected?'#ff8a1e':'#fff'; ctx.beginPath(); ctx.moveTo(-7,-9); ctx.lineTo(7,-9); ctx.lineTo(0,13); ctx.closePath(); ctx.fill(); ctx.fillStyle=i<collected?'#3fa35a':'#fff'; ctx.beginPath(); ctx.ellipse(0,-11,3,6,0,0,7); ctx.fill(); ctx.restore(); ctx.globalAlpha=1; }
-  } else {
+  if (story.id === 'olaf') {
     ctx.font='bold 18px "Comic Sans MS",sans-serif'; ctx.textAlign='left'; ctx.fillStyle='#fff';
     ctx.fillText("Build Olaf:", 36, 40);
     ctx.fillText(collected + " / " + totalItems, 40, 66);
     ctx.save(); ctx.translate(150, 66); ctx.scale(0.62,0.62); drawSnowman(0,-30,false,{ nose:parts.nose, arm:parts.arm||0, buttons:parts.buttons, hair:parts.hair }); ctx.restore();
+  } else {
+    // carrots & snowgies: a row of pips that fill as you collect
+    const label = story.id === 'carrots' ? "Sven's carrots:" : "Snowgies:";
+    ctx.font='bold 20px "Comic Sans MS",sans-serif'; ctx.textAlign='left'; ctx.fillStyle='#fff';
+    ctx.fillText(label, 36, 54);
+    const startPip = 40 + ctx.measureText(label).width + 16;
+    for (let i=0;i<totalItems;i++){
+      const cx = startPip + i*24, cy = 46, on = i < collected;
+      ctx.save(); ctx.translate(cx, cy);
+      if (story.id === 'carrots') {
+        ctx.rotate(0.2); ctx.globalAlpha = on?1:0.3;
+        ctx.fillStyle = on?'#ff8a1e':'#fff'; ctx.beginPath(); ctx.moveTo(-7,-9); ctx.lineTo(7,-9); ctx.lineTo(0,13); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = on?'#3fa35a':'#fff'; ctx.beginPath(); ctx.ellipse(0,-11,3,6,0,0,7); ctx.fill();
+      } else {
+        ctx.globalAlpha = on?1:0.35;
+        ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(0,0,9,0,7); ctx.fill();
+        if (on){ ctx.fillStyle='#20323f'; ctx.beginPath(); ctx.arc(-3,-1,1.4,0,7); ctx.arc(3,-1,1.4,0,7); ctx.fill(); ctx.fillStyle='#ff8a1e'; ctx.beginPath(); ctx.moveTo(0,1); ctx.lineTo(5,2); ctx.lineTo(0,3); ctx.closePath(); ctx.fill(); }
+      }
+      ctx.restore(); ctx.globalAlpha=1;
+    }
   }
   // area title
   ctx.textAlign='center'; ctx.fillStyle='rgba(28,59,87,0.30)';
   ctx.font='bold 24px "Comic Sans MS",sans-serif'; const t=area.title, w=ctx.measureText(t).width+40;
   roundRect(W/2-w/2,16,w,42,16); ctx.fill(); ctx.fillStyle='#fff'; ctx.fillText(t,W/2,45);
+  // room progress dots (which room you're in)
+  const n = story.areas.length, dotGap = 22, dx = W/2 - (n-1)*dotGap/2, dy = 72;
+  for (let i=0;i<n;i++){
+    ctx.beginPath(); ctx.arc(dx + i*dotGap, dy, i===areaIndex?7:5, 0, 7);
+    ctx.fillStyle = i < areaIndex ? '#8affc1' : (i === areaIndex ? '#fff' : 'rgba(255,255,255,0.45)');
+    ctx.fill();
+  }
   // controls hint
   ctx.font='bold 16px "Comic Sans MS",sans-serif'; ctx.fillStyle='rgba(255,255,255,0.85)'; ctx.textAlign='right';
   ctx.fillText('←  →  move    ↑  jump', W-80, 40);
@@ -673,46 +943,87 @@ function drawHUD() {
 function drawSwitchBanner() {
   ctx.fillStyle='rgba(28,59,87,0.55)'; ctx.fillRect(0,0,W,H);
   ctx.save(); ctx.translate(W/2,H/2+30); ctx.scale(1.7,1.7);
-  ctx.save(); const k=area.draw; ctx.scale(1,1);
-  if(k==='anna') drawAnna(false); else if(k==='elsa') drawElsa(false); else if(k==='kristoff') drawKristoff(false); else drawSven(false);
-  ctx.restore(); ctx.restore();
+  drawCharByKey(areaDraw());
+  ctx.restore();
   ctx.textAlign='center'; ctx.fillStyle='#fff'; ctx.font='bold 40px "Comic Sans MS",sans-serif';
-  ctx.fillText('Now you are ' + area.who + '!', W/2, H/2-90);
+  const heading = (playChar === 'everyone') ? ('Now you are ' + areaWho() + '!') : area.title;
+  fitText(heading, W/2, H/2-90, 820, 40);
   ctx.font='bold 22px "Comic Sans MS",sans-serif';
   ctx.fillText('←  →  walk      ↑  jump', W/2, H/2+160);
 }
+function drawCharByKey(k){
+  if (k==='anna') drawAnna(false); else if (k==='elsa') drawElsa(false);
+  else if (k==='kristoff') drawKristoff(false); else drawSven(false);
+}
 
 // ---- Menu ----------------------------------------------------------------
+function pulseAlpha(){ return RM() ? 0.9 : 0.6 + 0.4*Math.abs(Math.sin(performance.now()/500)); }
+
 function drawMenu() {
   ctx.fillStyle=skyGrad('#5b8fd6','#bfe3ff'); ctx.fillRect(0,0,W,H); snow();
   ctx.textAlign='center';
-  ctx.fillStyle='rgba(255,255,255,0.92)'; roundRect(W/2-330,48,660,96,26); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.92)'; roundRect(W/2-330,40,660,84,24); ctx.fill();
   ctx.fillStyle='#2b6cb0';
-  fitText('❄️ ' + NAME + "'s Frozen Games ❄️", W/2, 110, 610, 46);
+  fitText('❄️ ' + NAME + "'s Frozen Games ❄️", W/2, 96, 610, 42);
 
-  const cardW=360, cardH=250, gap=40, totalW=cardW*2+gap, startX=(W-totalW)/2, cy=200;
+  const n=STORIES.length, gap = n>=3 ? 22 : 40;
+  const cardW = Math.min(360, Math.floor((W-60 - gap*(n-1))/n)), cardH=236, cy=182;
+  const totalW=cardW*n+gap*(n-1), startX=(W-totalW)/2;
+  menuHits = [];
   STORIES.forEach((s,i)=>{
     const x=startX+i*(cardW+gap), sel=i===menuIndex;
+    menuHits.push({ i, x, y: cy, w: cardW, h: cardH });
     ctx.fillStyle = sel ? '#ffffff' : 'rgba(255,255,255,0.72)';
     if (sel){ ctx.strokeStyle='#ff3b6b'; ctx.lineWidth=6; }
     roundRect(x,cy,cardW,cardH,24); ctx.fill(); if(sel) ctx.stroke();
     // illustration
-    ctx.save(); ctx.translate(x+cardW/2, cy+120);
-    if (s.id==='carrots'){ ctx.scale(1.5,1.5); drawSven(false); }
-    else { drawSnowman(0,-20,true); }
+    ctx.save(); ctx.translate(x+cardW/2, cy+118);
+    if (s.id==='carrots'){ ctx.scale(1.3,1.3); drawSven(false); }
+    else if (s.id==='snowgies'){ ctx.scale(1.9,1.9); drawSnowgie(0,-6); }
+    else { drawSnowman(0,-16,true); }
     ctx.restore();
-    ctx.fillStyle='#2b6cb0'; ctx.font='bold 28px "Comic Sans MS",sans-serif';
-    ctx.fillText(s.emoji + ' ' + s.title, x+cardW/2, cy+cardH-46);
-    ctx.fillStyle='#1c3b57'; ctx.font='bold 17px "Comic Sans MS",sans-serif';
-    ctx.fillText(s.sub, x+cardW/2, cy+cardH-20);
+    ctx.fillStyle='#2b6cb0';
+    fitText(s.emoji + ' ' + s.title, x+cardW/2, cy+cardH-44, cardW-16, 24);
+    ctx.fillStyle='#1c3b57'; ctx.font='bold 14px "Comic Sans MS",sans-serif';
+    ctx.fillText(s.sub, x+cardW/2, cy+cardH-18);
   });
 
   ctx.fillStyle='#fff'; ctx.font='bold 22px "Comic Sans MS",sans-serif';
-  ctx.fillText('←  →  choose', W/2, cy+cardH+50);
-  const pulse=0.6+0.4*Math.abs(Math.sin(performance.now()/500));
-  ctx.fillStyle='rgba(255,59,107,'+pulse+')'; roundRect(W/2-170,cy+cardH+66,340,58,20); ctx.fill();
-  ctx.fillStyle='#fff'; ctx.font='bold 28px "Comic Sans MS",sans-serif';
-  ctx.fillText('Press  ↑  to Play', W/2, cy+cardH+104);
+  ctx.fillText('←  →  choose  (or tap)', W/2, cy+cardH+42);
+  ctx.fillStyle='rgba(255,59,107,'+pulseAlpha()+')'; roundRect(W/2-170,cy+cardH+58,340,54,20); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 26px "Comic Sans MS",sans-serif';
+  ctx.fillText('Press  ↑  to Play', W/2, cy+cardH+94);
+}
+
+// ---- Choose-your-character ------------------------------------------------
+function drawChoose() {
+  ctx.fillStyle=skyGrad('#7bb0e6','#dff1ff'); ctx.fillRect(0,0,W,H); snow();
+  ctx.textAlign='center';
+  ctx.fillStyle='rgba(255,255,255,0.92)'; roundRect(W/2-320,42,640,76,24); ctx.fill();
+  ctx.fillStyle='#2b6cb0'; fitText('Who do you want to be, ' + NAME + '?', W/2, 92, 600, 34);
+
+  const n=CHARS.length, gap=16;
+  const cardW=Math.floor((W-90 - gap*(n-1))/n), cardH=214, cy=168;
+  const totalW=cardW*n+gap*(n-1), startX=(W-totalW)/2;
+  chooseHits = [];
+  CHARS.forEach((c,i)=>{
+    const x=startX+i*(cardW+gap), sel=i===charIndex;
+    chooseHits.push({ i, x, y: cy, w: cardW, h: cardH });
+    ctx.fillStyle = sel ? '#fff' : 'rgba(255,255,255,0.75)';
+    if (sel){ ctx.strokeStyle='#ff3b6b'; ctx.lineWidth=6; }
+    roundRect(x,cy,cardW,cardH,20); ctx.fill(); if(sel) ctx.stroke();
+    ctx.save(); ctx.translate(x+cardW/2, cy+cardH-54); ctx.scale(0.95,0.95);
+    if (c.key==='everyone'){ ctx.font='60px sans-serif'; ctx.textAlign='center'; ctx.fillText('⭐', 0, -14); }
+    else drawCharByKey(c.key);
+    ctx.restore();
+    ctx.fillStyle='#2b6cb0'; fitText(c.name, x+cardW/2, cy+cardH-14, cardW-10, 20);
+  });
+
+  ctx.fillStyle='#fff'; ctx.font='bold 22px "Comic Sans MS",sans-serif';
+  ctx.fillText('←  →  choose  (or tap)', W/2, cy+cardH+42);
+  ctx.fillStyle='rgba(255,59,107,'+pulseAlpha()+')'; roundRect(W/2-170,cy+cardH+58,340,54,20); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 26px "Comic Sans MS",sans-serif';
+  ctx.fillText('Press  ↑  to Start', W/2, cy+cardH+94);
 }
 
 // ---- Win -----------------------------------------------------------------
@@ -720,14 +1031,14 @@ function drawWin() {
   ctx.fillStyle=skyGrad('#ffd6ec','#dff3ff'); ctx.fillRect(0,0,W,H);
   confetti.forEach(p=>{ ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.rot); ctx.fillStyle=p.c; ctx.fillRect(-p.s/2,-p.s/2,p.s,p.s*0.6); ctx.restore(); });
   if (story.id==='olaf') { ctx.save(); ctx.translate(W/2,380); ctx.scale(2.4,2.4); drawSnowman(0,0,true); ctx.restore(); }
+  else if (story.id==='snowgies') { for(let i=0;i<3;i++){ ctx.save(); ctx.translate(W/2-140+i*140, 400+Math.sin(performance.now()/300+i)*8); ctx.scale(2.4,2.4); drawSnowgie(0,0); ctx.restore(); } }
   else { ctx.save(); ctx.translate(W/2,410); ctx.scale(1.8,1.8); drawSven(false); ctx.restore(); for(let i=0;i<6;i++){ ctx.save(); ctx.translate(W/2-100+i*40, 500+Math.sin(performance.now()/400+i)*3); ctx.rotate(0.2); ctx.fillStyle='#ff8a1e'; ctx.beginPath(); ctx.moveTo(-9,-13); ctx.lineTo(9,-13); ctx.lineTo(0,16); ctx.closePath(); ctx.fill(); ctx.fillStyle='#3fa35a'; ctx.beginPath(); ctx.ellipse(0,-15,4,8,0,0,7); ctx.fill(); ctx.restore(); } }
   ctx.textAlign='center';
   ctx.fillStyle='rgba(255,255,255,0.92)'; roundRect(W/2-340,64,680,150,28); ctx.fill();
   ctx.fillStyle='#e0710f'; fitText('⭐ Great job, ' + NAME + '! ⭐', W/2, 120, 630, 48);
   ctx.fillStyle='#2b6cb0'; ctx.font='bold 26px "Comic Sans MS",sans-serif'; ctx.fillText(story.winTitle, W/2, 160);
   ctx.fillStyle='#1c3b57'; ctx.font='bold 22px "Comic Sans MS",sans-serif'; ctx.fillText(story.winLine, W/2, 195);
-  const pulse=0.6+0.4*Math.abs(Math.sin(performance.now()/500));
-  ctx.fillStyle='rgba(63,163,90,'+pulse+')'; roundRect(W/2-200,528,400,56,20); ctx.fill();
+  ctx.fillStyle='rgba(63,163,90,'+pulseAlpha()+')'; roundRect(W/2-200,528,400,56,20); ctx.fill();
   ctx.fillStyle='#fff'; ctx.font='bold 24px "Comic Sans MS",sans-serif'; ctx.fillText('Press  ↑  for the menu', W/2, 564);
 }
 
