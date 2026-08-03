@@ -457,6 +457,23 @@ let goldRun = 0;                       // golden stars found this playthrough
 let comboCount = 0, lastCollectMs = 0; // rising-cheer combo
 let buddy = null;                      // the little follower
 
+// ---- Learning beats (research-grounded: numeracy, phonics, executive fn) --
+const ITEM_INFO = {
+  carrot:  { word:'carrot',  plural:'carrots',  onset:'kuh' },
+  nose:    { word:'nose',    plural:'noses',    onset:'nnn' },
+  arm:     { word:'arm',     plural:'arms',     onset:'aah' },
+  buttons: { word:'button',  plural:'buttons',  onset:'buh' },
+  hair:    { word:'hair',    plural:'hairs',    onset:'huh' },
+  snowgie: { word:'snowgie', plural:'snowgies', onset:'sss' },
+};
+function itemInfo(t){ return ITEM_INFO[t] || { word:t, plural:t+'s', onset:'' }; }
+function roomItemInfo(){ return itemInfo((area.items[0] && area.items[0].type) || 'carrot'); }
+function storyPlural(){ return story.id === 'olaf' ? 'pieces' : (story.id === 'snowgies' ? 'snowgies' : 'carrots'); }
+let subitize = null;        // {n} quick-look subitizing peek for this room
+let freezeEv = null;        // {phase,t,bloom} "Elsa says Freeze/Go" beat
+let freezeAreaIndex = -1, compareAreaIndex = -1;
+let winRecap = null;        // {t,...} cardinality recap on the win screen
+
 // =========================================================================
 //  GAME STATE
 // =========================================================================
@@ -481,9 +498,14 @@ function startStory(idx) {
   totalItems = story.areas.reduce((n,a)=> n + a.items.length, 0);
   collected = 0; parts = {};
   areaIndex = 0; charIndex = 0;
-  goldRun = 0; comboCount = 0; lastCollectMs = 0;
+  goldRun = 0; comboCount = 0; lastCollectMs = 0; winRecap = null;
   timeOfDay = ['day','day','sunset','night'][Math.floor(Math.random()*4)];   // a world that changes
   hatIndex = Math.max(0, HATS.findIndex(h => h.key === playHat));
+  // Pick which rooms host the "Freeze/Go" and "Sven wants more" beats.
+  const nA = story.areas.length;
+  freezeAreaIndex = 1 + Math.floor(Math.random() * Math.max(1, nA - 1));       // never the first room
+  compareAreaIndex = (story.id === 'carrots' || story.id === 'snowgies') ? 0 : -1;  // set below to a real room
+  if (compareAreaIndex === 0) { do { compareAreaIndex = Math.floor(Math.random()*nA); } while (compareAreaIndex === freezeAreaIndex && nA > 1); }
   state = 'choose'; stateTime = 0;
   sfxTick(); say("Who do you want to be?");
 }
@@ -512,6 +534,22 @@ function loadArea() {
   areaCleared = false; clearTimer = 0;
   if (area.friend) { area.friend.cool = 0; area.friend.hop = 0; }
   initBuddy();
+  // Decide this room's learning beat.
+  area.cued = {}; subitize = null; freezeEv = null; area.compareData = null;
+  if (areaIndex === compareAreaIndex) { setupCompare(area); area.beat = 'compare'; }
+  else if (areaIndex % 2 === 0)       { area.beat = 'subitize'; subitize = { n: 2 + Math.floor(Math.random()*3) }; }  // 2–4
+  else                                { area.beat = 'ispy'; }
+  if (areaIndex === freezeAreaIndex && area.beat !== 'compare') freezeEv = { phase:'wait', t:0, bloom:0 };
+}
+// Build the two-pile "which is more?" choice for a compare room.
+function setupCompare(a){
+  const P = a.platforms, swap = Math.random() < 0.5;
+  a.compareData = {
+    left:  { x: P[1].x + P[1].w/2, y: P[1].y, n: swap ? 3 : 2 },
+    right: { x: P[2].x + P[2].w/2, y: P[2].y, n: swap ? 2 : 3 },
+    type: (a.items[0] && a.items[0].type) || 'carrot',
+    done: false, pick: null, anim: 0,
+  };
 }
 function areaItemsLeft() { return area.items.some(it => !it.got); }
 
@@ -525,14 +563,16 @@ function update(dt) {
   else if (state === 'play') updatePlay(dt);
   else if (state === 'win') {
     confetti.forEach(p => { p.x += p.vx*dt; p.y += p.vy*dt; p.rot += p.vr*dt; if (p.y > H+20){ p.y=-20; p.x=Math.random()*W; } });
+    updateWinRecap(dt);
   }
 
-  // sparkles, hearts & popups
+  // sparkles, hearts, puffs, blooms & popups
   for (let i = sparkles.length-1; i>=0; i--){
     const s = sparkles[i]; s.life -= dt;
     if (s.kind === 'burst') { s.x += s.vx*dt; s.y += s.vy*dt; s.vy += 300*dt; }
     else if (s.kind === 'heart') { s.x += s.vx*dt; s.y += s.vy*dt; s.vy += 26*dt; }
     else if (s.kind === 'puff') { s.x += s.vx*dt; s.y += s.vy*dt; s.vy += 40*dt; }
+    else if (s.kind === 'bloom') { s.y += s.vy*dt; }
     if (s.life <= 0) sparkles.splice(i,1);
   }
   for (let i = popups.length-1; i>=0; i--){ const p=popups[i]; p.life-=dt; p.y-=40*dt; if(p.life<=0) popups.splice(i,1); }
@@ -544,6 +584,7 @@ function update(dt) {
 }
 
 function updatePlay(dt) {
+  processEduCues(dt);           // spoken learning beats (I-spy / subitize / freeze / compare)
   // horizontal
   let dx = 0;
   if (keys.ArrowLeft) dx -= 1;
@@ -584,6 +625,25 @@ function updatePlay(dt) {
     }
   }
 
+  // "Sven wants MORE" — landing on a pile teaches more/fewer by comparison
+  const cd = area.compareData;
+  if (cd) {
+    cd.anim += dt;
+    if (!cd.done && player.onGround) {
+      const onL = Math.abs(player.x - cd.left.x)  < 64 && Math.abs(player.y - cd.left.y)  < 8;
+      const onR = Math.abs(player.x - cd.right.x) < 64 && Math.abs(player.y - cd.right.y) < 8;
+      if (onL || onR) {
+        cd.done = true; cd.pick = onL ? 'left' : 'right'; cd.anim = 0;
+        const pickN = onL ? cd.left.n : cd.right.n, otherN = onL ? cd.right.n : cd.left.n;
+        const hi = Math.max(cd.left.n, cd.right.n), lo = Math.min(cd.left.n, cd.right.n);
+        if (pickN > otherN) { sfxGold(); goldRun++; addStar(); say('Yes! ' + numWord(hi) + ' is more than ' + numWord(lo) + '. Great job!'); }
+        else { sfxTick(); say('That is ' + numWord(pickN) + '. This side has ' + numWord(otherN) + '. ' + numWord(hi) + ' is more!'); }
+        const px = onL ? cd.left.x : cd.right.x, py = (onL ? cd.left.y : cd.right.y) - 40;
+        for (let i=0;i<(RM()?10:24);i++){ const a=Math.random()*Math.PI*2, sp=60+Math.random()*150; sparkles.push({x:px,y:py,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,max:1,kind:'burst'}); }
+      }
+    }
+  }
+
   // Elsa sparkle trail (calmer when reduced-motion is on)
   if (areaDraw() === 'elsa' && (player.moving || !player.onGround) && Math.random() < (RM() ? 0.25 : 0.6))
     sparkles.push({ x: player.x + (Math.random()*24-12), y: player.y - 30, life: 0.7, max: 0.7, kind:'trail' });
@@ -602,7 +662,9 @@ function updatePlay(dt) {
       lastCollectMs = nowMs;
       sfxCollect(); sfxCombo(comboCount - 1);
       if (buddy) buddy.cheer = 0.6;
-      say(numWord(collected));                                   // count out loud
+      // say the word (vocabulary) + running count; stretch the onset in I-spy rooms (phonics)
+      const info = itemInfo(it.type);
+      say((area.beat === 'ispy' ? info.onset + '... ' : '') + info.word + '! ' + numWord(collected));
       popups.push({ x: it.x, y: it.y - 20, life: 1.2, type: it.type, count: collected });
       const burst = (RM() ? 8 : 22) + Math.min(comboCount * 4, 20);
       for (let i=0;i<burst;i++){ const a=Math.random()*Math.PI*2, sp=60+Math.random()*150; sparkles.push({x:it.x,y:it.y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,max:1,kind:'burst'}); }
@@ -666,10 +728,14 @@ function updatePlay(dt) {
   // Area cleared → celebrate once, then advance when they reach the flag
   // (or automatically after a short beat, so no one gets stuck).
   if (!areaItemsLeft()) {
-    if (!areaCleared) { areaCleared = true; clearTimer = 0; say("You found them all!"); }
+    if (!areaCleared) {
+      areaCleared = true; clearTimer = 0;
+      const rn = area.items.length, info = roomItemInfo();       // per-room cardinal
+      say(rn >= 2 ? ('You found them all! That is ' + numWord(rn) + ' ' + info.plural + '!') : 'You found it!');
+    }
     clearTimer += dt;
     const atFlag = player.onGround && Math.abs(player.x - area.flagX) < 55;
-    if (atFlag || clearTimer > 3.0) advanceArea();
+    if (atFlag || clearTimer > 3.2) advanceArea();
   }
 
   // camera follows player
@@ -681,7 +747,26 @@ function winGame() {
   const n = RM() ? 45 : 150, vscale = RM() ? 0.6 : 1;
   for (let i=0;i<n;i++) confetti.push({ x:Math.random()*W, y:-Math.random()*H, vy:(60+Math.random()*130)*vscale, vx:Math.random()*40-20, rot:Math.random()*Math.PI, vr:Math.random()*6-3, c:['#ff6b9d','#7ed0ff','#ffd93b','#8affc1','#c8a2ff','#fff'][Math.floor(Math.random()*6)], s:8+Math.random()*8 });
   sfxWin(); state='win'; stateTime=0;
-  say("Great job, " + NAME + "! " + story.winTitle);
+  // Cardinality recap of the whole set, then praise (spoken in updateWinRecap).
+  winRecap = { t:0, asked:false, counted:0, cardinal:false, praised:false };
+}
+// Count the total out loud ("one… two… so we found SIX in all!") then celebrate.
+function updateWinRecap(dt){
+  if (!winRecap) return;
+  winRecap.t += dt;
+  const START = 2.4, STEP = 0.6;
+  if (!winRecap.asked && winRecap.t > 0.6) { winRecap.asked = true; say('How many did we find in all?'); }
+  if (winRecap.t > START && winRecap.counted < totalItems) {
+    const target = Math.min(totalItems, Math.floor((winRecap.t - START) / STEP) + 1);
+    while (winRecap.counted < target) { winRecap.counted++; sfxCombo(winRecap.counted - 1); say(numWord(winRecap.counted)); }
+  }
+  const doneAt = START + totalItems * STEP;
+  if (!winRecap.cardinal && winRecap.counted >= totalItems && winRecap.t > doneAt + 0.3) {
+    winRecap.cardinal = true; say('So we found ' + numWord(totalItems) + ' ' + storyPlural() + ' in all!');
+  }
+  if (!winRecap.praised && winRecap.cardinal && winRecap.t > doneAt + 2.2) {
+    winRecap.praised = true; say('Great job, ' + NAME + '!');
+  }
 }
 
 // =========================================================================
@@ -706,10 +791,12 @@ function draw() {
       area.pokes.forEach(drawMound);
       area.platforms.forEach(p => drawPlatform(p, area.theme));
       if (area.friend) drawBunny(area.friend.x, GROUND, area.friend.hop);
+      if (area.compareData) drawCompare(area.compareData);
       if (area.bonus && !area.bonus.got) drawGolden(area.bonus);
       area.items.forEach(it => { if (!it.got) { drawItem(it.type, it.x, it.y, it.wob, false); drawHintArrow(it.x, it.y, it.wob); } });
       drawFlag(area.flagX, !areaItemsLeft(), story.emoji);
       drawSparklesWorld('trail');
+      drawBloomWorld();
       drawBuddy();
       drawCharacter(areaDraw(), player.x, player.y, player.moving && player.onGround ? player.bob : 0, !player.onGround);
       area.bubbles.forEach(drawBubble);
@@ -719,6 +806,8 @@ function draw() {
       popups.forEach(p => drawPopup(p));
     ctx.restore();
     drawHUD();
+    drawSubitize();                       // quick-look "how many?" peek
+    drawFreeze();                         // "Elsa says Freeze / Go!"
     if (state === 'switching') drawSwitchBanner();
   }
   ctx.restore();
@@ -1173,6 +1262,17 @@ function drawWin() {
     ctx.fillStyle='#b8860b'; ctx.font='bold 22px "Comic Sans MS",sans-serif';
     ctx.fillText('🌟 ' + goldRun + ' golden star' + (goldRun>1?'s':'') + '!   (⭐ ' + starTotal + ' in all)', W/2, 250);
   }
+  // Cardinality recap: count the whole set up on screen (covers the star line while it runs)
+  if (winRecap && !winRecap.praised) {
+    ctx.fillStyle='rgba(255,255,255,0.9)'; roundRect(W/2-172,224,344,72,18); ctx.fill();
+    const shown = winRecap.cardinal ? totalItems : winRecap.counted;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillStyle='#e0710f'; ctx.font='bold 34px "Comic Sans MS",sans-serif';
+    ctx.fillText(shown > 0 ? String(shown) : '?', W/2, 249);
+    ctx.textBaseline='alphabetic';
+    const n=totalItems, gap=Math.min(28, 300/Math.max(1,n)), rx=W/2-(n-1)*gap/2, ry=279;
+    for (let i=0;i<n;i++){ ctx.beginPath(); ctx.arc(rx+i*gap, ry, 8, 0, 7); ctx.fillStyle = i < winRecap.counted ? '#ff8a1e' : 'rgba(43,108,176,0.22)'; ctx.fill(); }
+  }
   ctx.fillStyle='rgba(63,163,90,'+pulseAlpha()+')'; roundRect(W/2-200,528,400,56,20); ctx.fill();
   ctx.fillStyle='#fff'; ctx.font='bold 24px "Comic Sans MS",sans-serif'; ctx.textBaseline='middle'; ctx.fillText('Press  ↑  for the menu', W/2, 528+28); ctx.textBaseline='alphabetic';
 }
@@ -1283,6 +1383,95 @@ function skyOverlay(){
     ctx.fillStyle='#f7f3d8'; ctx.beginPath(); ctx.arc(W-120,90,28,0,7); ctx.fill();
     drawAurora();
   }
+}
+
+// =========================================================================
+//  LEARNING BEATS — spoken cues + their visuals
+// =========================================================================
+function processEduCues(dt){
+  const a = area, s = stateTime, info = roomItemInfo();
+  // Room-start beat (spoken once)
+  if (a.beat === 'ispy' && !a.cued.ispy && s > 0.8) { a.cued.ispy = true; say('I spy something that starts with, ' + info.onset + '. Can you find it?'); }
+  if (a.beat === 'subitize' && subitize) {
+    if (!a.cued.sq && s > 0.8) { a.cued.sq = true; say('Quick look! How many snowflakes?'); }
+    if (!a.cued.sa && s > 2.7) { a.cued.sa = true; say(numWord(subitize.n) + '!'); }
+  }
+  if (a.beat === 'compare' && a.compareData && !a.cued.cmp && s > 0.8) { a.cued.cmp = true; say('Sven wants more ' + info.plural + '! Hop to the side with more.'); }
+  // "Elsa says Freeze / Go!" — reward holding still (inhibitory control)
+  if (freezeEv) {
+    freezeEv.t += dt;
+    if (freezeEv.phase === 'wait') { if (s > 3.6) { freezeEv.phase = 'freeze'; freezeEv.t = 0; freezeEv.bloom = 0; sfxSwitch(); say('Elsa says... Freeze!'); } }
+    else if (freezeEv.phase === 'freeze') {
+      if (!player.moving && player.onGround) {
+        freezeEv.bloom += dt;
+        if (!RM() && Math.random() < 0.3) sparkles.push({ x: player.x + (Math.random()*60-30), y: GROUND-8, vy: -14, life: 1.1, max: 1.1, kind:'bloom', c:['#ff8fb1','#ffd23f','#c8a2ff','#8affc1'][Math.floor(Math.random()*4)] });
+      }
+      if (freezeEv.t > 2.6) {
+        freezeEv.phase = 'go'; freezeEv.t = 0; sfxTick();
+        if (freezeEv.bloom > 1.2) { goldRun++; addStar(); sfxGold(); say('And... Go! You did it!'); }
+        else say('And... Go!');
+      }
+    }
+    else if (freezeEv.phase === 'go') { if (freezeEv.t > 1.2) freezeEv.phase = 'done'; }
+  }
+}
+// Subitizing quick-look (screen space): flash a small group, ask, pause, reveal.
+function drawSubitize(){
+  if (state !== 'play' || !subitize || area.beat !== 'subitize') return;
+  const s = stateTime; if (s > 4.4) return;
+  const cx = W/2, cy = 150;
+  ctx.save();
+  ctx.fillStyle = 'rgba(28,59,87,0.45)'; roundRect(cx-120, 92, 240, 128, 20); ctx.fill();
+  ctx.textAlign = 'center';
+  if (s < 1.7) {
+    for (let i=0;i<subitize.n;i++){ const ang = i/subitize.n*Math.PI*2 - Math.PI/2; drawSnowflakeIcon(cx + Math.cos(ang)*42, cy + Math.sin(ang)*30, 15, '#eaf6ff'); }
+  } else if (s < 2.7) {
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 66px "Comic Sans MS",sans-serif'; ctx.textBaseline = 'middle'; ctx.fillText('?', cx, cy+6); ctx.textBaseline = 'alphabetic';
+  } else {
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 66px "Comic Sans MS",sans-serif'; ctx.textBaseline = 'middle'; ctx.fillText(String(subitize.n), cx, cy-6); ctx.textBaseline = 'alphabetic';
+    for (let i=0;i<subitize.n;i++){ drawSnowflakeIcon(cx - (subitize.n-1)*16 + i*32, cy+42, 11, '#eaf6ff'); }
+  }
+  ctx.restore();
+}
+// Freeze/Go overlay (screen space).
+function drawFreeze(){
+  if (state !== 'play' || !freezeEv) return;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (freezeEv.phase === 'freeze') {
+    ctx.fillStyle = 'rgba(180,220,255,' + (RM()?0.16:0.26) + ')'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = '#2b6cb0'; ctx.font = 'bold 60px "Comic Sans MS",sans-serif';
+    titleWithIcons('Freeze!', W/2, 116, 300, 60, (ix,iy,ir)=>drawSnowflakeIcon(ix,iy,ir,'#2b6cb0'));
+  } else if (freezeEv.phase === 'go' && freezeEv.t < 1.0) {
+    ctx.fillStyle = '#3fa35a'; ctx.font = 'bold 64px "Comic Sans MS",sans-serif'; ctx.fillText('Go!', W/2, 116);
+  }
+  ctx.textBaseline = 'alphabetic';
+}
+// "Sven wants MORE" piles (world space). After a pick, the extra item pulses.
+function drawPileItem(type, x, y){ ctx.save(); ctx.translate(x,y); ctx.scale(0.62,0.62); if (type==='snowgie') drawSnowgie(0,0); else drawCarrotShape(0,0); ctx.restore(); }
+function drawCompare(cd){
+  const bigger = cd.left.n >= cd.right.n ? cd.left : cd.right;
+  const smaller = cd.left.n >= cd.right.n ? cd.right : cd.left;
+  [cd.left, cd.right].forEach(side => {
+    const n = side.n, top = side.y - 26, spread = 26, startx = side.x - (n-1)*spread/2;
+    for (let i=0;i<n;i++){
+      const ix = startx + i*spread;
+      if (cd.done && side === bigger && i >= smaller.n) glow(ix, top, 20, true);   // the "extra" that makes it more
+      drawPileItem(cd.type, ix, top);
+    }
+    if (!cd.done) { const ay = top - 40 + Math.sin(performance.now()/250)*5; ctx.fillStyle='#ff3b6b'; ctx.beginPath(); ctx.moveTo(side.x-13,ay-11); ctx.lineTo(side.x+13,ay-11); ctx.lineTo(side.x,ay+8); ctx.closePath(); ctx.fill(); }
+  });
+}
+function drawBloomWorld(){
+  sparkles.forEach(s => {
+    if (s.kind !== 'bloom') return;
+    const a = Math.max(0, s.life/s.max);
+    ctx.save(); ctx.globalAlpha = a; ctx.translate(s.x, s.y);
+    ctx.fillStyle = s.c || '#ff8fb1';
+    for (let i=0;i<5;i++){ const ang = i/5*Math.PI*2; ctx.beginPath(); ctx.arc(Math.cos(ang)*6, Math.sin(ang)*6, 3.4, 0, 7); ctx.fill(); }
+    ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.arc(0,0,3,0,7); ctx.fill();
+    ctx.restore();
+  });
+  ctx.globalAlpha = 1;
 }
 
 // =========================================================================

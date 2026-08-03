@@ -45,6 +45,18 @@ From the menu, use **← →** (or the touch buttons) to choose a story and **�
 - Big, colorful pictures with minimal reading.
 - Gentle built-in sound effects (mutable).
 
+## 🎓 Learning built into the play
+
+Grounded in early-learning research (Clements & Sarama's Building Blocks for numeracy; phonological-awareness guidance; Adele Diamond on executive function) and designed so the learning *is* the fun — never a quiz, always no-fail, always spoken (no reading required):
+
+- **Counting & cardinality** — pieces are counted out loud as you collect ("one!… two!…"), and at the end the whole set is counted up together: *"So we found **six** in all!"* (the idea that the last number names the group).
+- **"I spy the sound"** — in some rooms the buddy hunts by first sound: *"I spy something that starts with /sss/…"*, building phonological awareness.
+- **"Quick-look! How many?"** — a quick flash of a small group of snowflakes, a pause to think, then the answer — practising **subitizing** (seeing small amounts at a glance).
+- **"Elsa says Freeze… and Go!"** — a gentle freeze-game that rewards holding still with blooming ice-flowers, practising **self-control** (executive function).
+- **"Sven wants MORE!"** — sometimes two piles appear; hop to the one with **more**, and the extra piece lights up to show *why* it's more (comparing amounts).
+
+Each beat invites a grown-up to play along ("you say Freeze and Go!") — research shows a parent joining in makes learning stick.
+
 ## 🎉 Extra fun to discover
 
 - **Dress-up hats** — pick a crown, party hat, beanie, bow, or flower for your hero; it's remembered next time.
