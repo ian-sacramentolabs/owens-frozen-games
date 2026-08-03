@@ -21,7 +21,7 @@ A gentle, kid-friendly browser game made for a 4-year-old — a *Frozen*-themed 
 
 **On a phone or tablet — touch buttons:** big **◀ ▶** buttons (bottom-left) to walk and a large **⬆** button (bottom-right) to jump appear automatically on touch screens. The 🏠 and 🔊 buttons work with a tap too.
 
-From the menu, use **← →** (or the touch buttons) to choose a story and **↑** (or ⬆) to start — or just **tap a card**. Then **pick who you want to be** (Anna, Elsa, Kristoff, Sven, or *Everyone!* for the classic mix).
+From the menu, use **← →** (or the touch buttons) to choose a story and **↑** (or ⬆) to start — or just **tap a card**. Then **pick who you want to be** (Anna, Elsa, Kristoff, Sven, or *Everyone!* for the classic mix) and **dress up in a hat** (crown, party hat, beanie, bow, or flower — press **↓** or tap a hat).
 
 **Your name:** the first time you open the game it asks *"Who's playing?"* — a grown-up types the child's name and it appears throughout the game ("Sofia's Frozen Games", "Great job, Sofia!"). The name is remembered on that device, and the **✏️ button** (top-right) changes it anytime.
 
@@ -44,6 +44,16 @@ From the menu, use **← →** (or the touch buttons) to choose a story and **�
 - **No fail state, no timer, no enemies** — impossible to get stuck or lose.
 - Big, colorful pictures with minimal reading.
 - Gentle built-in sound effects (mutable).
+
+## 🎉 Extra fun to discover
+
+- **Dress-up hats** — pick a crown, party hat, beanie, bow, or flower for your hero; it's remembered next time.
+- **A follower buddy** — a little snowgie trots along behind you and hops when you jump.
+- **Surprise layouts** — the platforms and pieces move to new spots every play, so it never feels the same twice.
+- **Golden stars** — a rare shiny star sometimes hides in a room; find it for a special sparkle. Your total is kept between plays.
+- **Rising cheer** — collecting quickly plays a happy climbing tune.
+- **Things to play with** — bounce on the springy pad, pop floating bubbles (tap or bump them), and poke the snow mounds to make a snowgie peek out and say "Boo!".
+- **A world that changes** — each play is set in daytime, a warm sunset, or a starry night with a moon and shimmering aurora.
 
 ## 🛠️ Tech
 
